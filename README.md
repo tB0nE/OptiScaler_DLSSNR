@@ -1,3 +1,22 @@
+# OptiScaler DLSS-NR pre-SR multipass fork
+
+> [!IMPORTANT]
+> This is an experimental fork of [Dagherbou/OptiScaler_DLSSNR](https://github.com/Dagherbou/OptiScaler_DLSSNR), based on commit [`97376162`](https://github.com/Dagherbou/OptiScaler_DLSSNR/commit/973761621353b99bee3dc7d4bb27b117fef2644f) (`v0.2.0-dlssnr` / `v0.2.0-patch1`). It is not the main OptiScaler project and is not supported by NVIDIA or game developers.
+
+The upstream fork already provided experimental direct access to NVIDIA DLSS Neural Rendering. This fork adds:
+
+- **Optional Neural Rendering before DLSS Super Resolution.** The model can process the DLSS input image—such as 1920x1080 in 4K Performance mode—before DLSS upscales it to the display resolution.
+- **Configurable multipass processing.** `[DlssNr] Passes=1..3` runs one, two, or three sequential neural evaluations. Each pass has independent persistent history; the final result is composed once against the original base image.
+- **Guarded fallbacks.** Ray Reconstruction remains post-SR, and padded or offset dynamic-resolution inputs fall back to the existing post-SR path instead of using unsafe dimensions.
+- **Matching overlay and INI controls.** `RunBeforeSR` and `Passes` are exposed in both configuration and the OptiScaler overlay.
+- **Verified BG3 path.** Baldur's Gate 3 was tested with two neural passes at 1920x1080 followed by DLSS Super Resolution to 3840x2160.
+
+Download the exact tested BG3 package from the [BG3 pre-SR multipass release](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/bg3-presr-multipass-e16d5866). NVIDIA's proprietary `nvngx_dlssnr.dll` is required but is **not redistributed** here.
+
+Implementation details and safety invariants are documented in [the pre-SR multipass design note](OptiScaler/dlssnr/design/pre-sr-multipass.md). The remainder of this README is the upstream OptiScaler documentation.
+
+---
+
 <div align="center">
 
   ![Logo](https://github.com/user-attachments/assets/c7dad5da-0b29-4710-8a57-b58e4e407abd)
