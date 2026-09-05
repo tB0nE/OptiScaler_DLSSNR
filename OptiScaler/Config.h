@@ -257,6 +257,9 @@ class Config
     // DLSS Neural Rendering: a detail-synthesis pass over the upscaler's output. Off by default -- it is
     // an undocumented feature driven directly through its snippet, not something NVIDIA exposes.
     CustomOptional<bool> DlssNrEnabled { false };
+    // Run the NR pass on the upscaler's colour input, at render resolution, immediately before SR.
+    // Off preserves the v0.2.0 post-upscale placement.
+    CustomOptional<bool> DlssNrRunBeforeSr { false };
     // Toggles the pass in game. Unbound by default -- a key that does something unexpected is worse
     // than one that does nothing.
     CustomOptional<int> DlssNrToggleKey { UnboundKey };
@@ -464,15 +467,17 @@ class Config
     // picture that had been tuned came back wrong for a reason nothing on screen explained.
     CustomOptional<float> DlssNrScanTrim { 1.0f };
 
-    // How many times to run the model over the same frame, each pass fed the previous one's answer.
+    // How many sequential model layers to run between one encode and one final composition. Each extra
+    // layer consumes the preceding model output and owns a persistent feature/history. The implementation
+    // deliberately caps this at three and never evaluates a feature on the command list that created it.
     //
     // 1 is what the model was trained for and what every published number describes. Above that it
     // is being asked to enhance its own output, which is outside its training distribution: detail
-    // compounds, and so does anything it got wrong. Two often looks richer. Four usually looks
-    // synthetic. Eight is there because somebody will want to see it.
+    // compounds, and so does anything it got wrong. Two often looks richer; three is the guarded
+    // ceiling because further layers converge while still paying the full cost.
     //
     // The cost is exactly linear -- the model is 98% of the frame's expense and every pass pays it
-    // again -- so 8 costs eight times, near enough. There is no shortcut and no amortisation: the
+    // again -- so 3 costs three times, near enough. There is no shortcut and no amortisation: the
     // passes are sequential and each one needs the last one's output.
     CustomOptional<uint32_t> DlssNrPasses { 1 };
 

@@ -1157,6 +1157,11 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D12_EvaluateFeature(ID3D12GraphicsCom
         {
             LOG_DEBUG("Passthrough to native DLSS EvaluateFeature for handle {}", handleId);
 
+            // Pre-SR placement is valid only for Super Resolution. Ray Reconstruction carries a
+            // different set of inputs and stays on the post-upscale path.
+            if (feature == NVSDK_NGX_Feature_SuperSampling)
+                DlssNr::EvaluateBeforeUpscale(InCmdList, InParameters);
+
             NVSDK_NGX_Result result =
                 NVNGXProxy::D3D12_EvaluateFeature()(InCmdList, InFeatureHandle, InParameters, InCallback);
             LOG_DEBUG("Native DLSS EvaluateFeature result: 0x{:X}", (uint32_t) result);
@@ -1167,7 +1172,8 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D12_EvaluateFeature(ID3D12GraphicsCom
             // motion vectors too, and its handle can reach here because the branch above does not
             // return, so filtering on the parameter block alone would run the model twice a frame.
             if (result == NVSDK_NGX_Result_Success && feature != NVSDK_NGX_Feature_FrameGeneration)
-                DlssNr::EvaluateAfterUpscale(InCmdList, InParameters);
+                DlssNr::EvaluateAfterUpscale(InCmdList, InParameters, nullptr,
+                                             feature == NVSDK_NGX_Feature_RayReconstruction);
 
             return result;
         }
@@ -1189,12 +1195,16 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D12_EvaluateFeature(ID3D12GraphicsCom
     if (lastDlssgCameraFar.has_value())
         InParameters->Set("DLSSG.CameraFar", lastDlssgCameraFar.value());
 
+    if (feature == NVSDK_NGX_Feature_SuperSampling)
+        DlssNr::EvaluateBeforeUpscale(InCmdList, InParameters);
+
     // OptiScaler internal handling
     const NVSDK_NGX_Result optiResult = TryEvaluateOptiFeature(InCmdList, InFeatureHandle, InParameters, InCallback);
 
     // Same pass, for OptiScaler's own upscalers rather than native DLSS.
     if (optiResult == NVSDK_NGX_Result_Success && feature != NVSDK_NGX_Feature_FrameGeneration)
-        DlssNr::EvaluateAfterUpscale(InCmdList, InParameters);
+        DlssNr::EvaluateAfterUpscale(InCmdList, InParameters, nullptr,
+                                     feature == NVSDK_NGX_Feature_RayReconstruction);
 
     return optiResult;
 }

@@ -94,11 +94,23 @@ void RenderMenu(Config* config, float menuResScale)
         if (ImGui::Checkbox("Enable Neural Rendering", &enabled))
             config->DlssNrEnabled = enabled;
 
-        HelpMarker("Synthesises detail in the upscaler's output, before frame generation sees it."
-                       "\n\nNeeds two similarly named files beside OptiScaler, one character apart:"
-                       "\n  nvngx_dlssnr.dll       NVIDIA's model (~165 MB) -- you supply it"
-                       "\n  nvngx.dll_dlssnr.dll   the forwarder (~13 KB) -- ships in this package"
-                       "\nUndocumented and driven directly, so none of this is officially supported.");
+        HelpMarker("Synthesises detail in the upscaler's frame, before frame generation sees it."
+                   "\n\nNeeds two similarly named files beside OptiScaler, one character apart:"
+                   "\n  nvngx_dlssnr.dll       NVIDIA's model (~165 MB) -- you supply it"
+                   "\n  nvngx.dll_dlssnr.dll   the forwarder (~13 KB) -- ships in this package"
+                   "\nUndocumented and driven directly, so none of this is officially supported.");
+
+        bool beforeSr = config->DlssNrRunBeforeSr.value_or_default();
+        if (ImGui::Checkbox("Apply before Super Resolution", &beforeSr))
+            config->DlssNrRunBeforeSr = beforeSr;
+
+        HelpMarker("Runs Neural Rendering on the render-resolution colour input immediately before"
+                   "\nSuper Resolution, so SR temporally accumulates and upscales the enhanced frame."
+                   "\n\nRay Reconstruction is deliberately excluded: its input contract differs and"
+                   "\ncontinues to use the post-upscale Neural Rendering path. Padded or offset"
+                   "\ndynamic-resolution inputs also fall back post-upscale for safety."
+                   "\n\nThis placement control currently applies to the Direct3D 12 path and its"
+                   "\nDirect3D 11/Vulkan bridges; native Vulkan keeps the post-upscale path.");
 
         // The toggle can be bound to a key, and nobody would think to look for it under Keybinds
         // unless told. Dimmed, because it is a note rather than a setting.
@@ -177,6 +189,34 @@ void RenderMenu(Config* config, float menuResScale)
 
         ImGui::Spacing();
         ImGui::PushItemWidth(220.0f * menuResScale);
+
+        ImGui::SeparatorText("Cost");
+
+        {
+            int passes = (int) std::clamp(config->DlssNrPasses.value_or_default(), 1u,
+                                          DlssNr::MaxPassCount);
+            const ImVec4 colour = passes <= 1   ? ImVec4(0.35f, 0.88f, 0.38f, 1.0f)
+                                  : passes == 2 ? ImVec4(0.95f, 0.70f, 0.20f, 1.0f)
+                                                : ImVec4(0.92f, 0.30f, 0.25f, 1.0f);
+
+            ImGui::PushStyleColor(ImGuiCol_Text, colour);
+            ImGui::PushStyleColor(ImGuiCol_SliderGrab, colour);
+
+            if (ImGui::SliderInt("Model passes", &passes, 1, (int) DlssNr::MaxPassCount,
+                                 passes == 1 ? "%d (normal)" : "%dx model cost"))
+                config->DlssNrPasses = (uint32_t) std::clamp(passes, 1, (int) DlssNr::MaxPassCount);
+
+            ImGui::PopStyleColor(2);
+
+            HelpMarker("Runs sequential model layers between one encode and one final composition."
+                       "\nEach additional layer consumes the previous layer's model output and owns"
+                       "\na separate persistent feature and temporal history."
+                       "\n\nThe base proxy stays immutable and the final answer is composed against it"
+                       "\nonce, so colour and transfer strength do not compound. Local tone is applied"
+                       "\nonly by the first layer."
+                       "\n\nCost scales almost linearly. Two is the common 'deep fried' look; three is"
+                       "\nthe guarded ceiling because later layers converge while cost and artifacts grow.");
+        }
 
         // Any percentage, rather than a handful of steps somebody chose in advance. The lower bound
         // is 25%: below that the model is working on so little of the picture that its answer no

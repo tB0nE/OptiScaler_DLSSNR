@@ -70,6 +70,16 @@ struct DlssNrFrameInfo
     // washed out and banded.
     bool ColourIsLinearHdr = true;
 
+    // The SR colour input arrives readable, whereas a completed upscaler output normally arrives as
+    // a UAV. The DX12 pass uses this to preserve the caller's state and to fall back through a copy
+    // when a pre-SR colour resource was not created with UAV support.
+    bool BeforeUpscale = false;
+
+    // Submission epoch supplied by the caller. Native DX12 uses the wrapped swapchain Present count;
+    // the DX11/Vulkan bridges use their successfully submitted frame counter. A feature created in an
+    // epoch is never evaluated until this value changes.
+    unsigned long long SubmissionEpoch = 0;
+
     // The game's own exposure: a 1x1 texture holding, in the SDK's words, "the final exposure scale".
     //
     // This is the number that makes a cave and a field comparable, and it is the reason a fixed paper

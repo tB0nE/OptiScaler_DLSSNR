@@ -19,6 +19,8 @@ class Config;
 
 namespace DlssNr
 {
+inline constexpr unsigned int MaxPassCount = 3;
+
 // The model runs immediately after the game's upscaler, before the interface is drawn. It is shown a
 // display-referred proxy of that frame -- the sort of picture it was trained on -- and its answer is
 // composed back over the untouched original.
@@ -31,7 +33,14 @@ namespace DlssNr
 // State::currentCommandQueue only exists once a D3D12 swapchain has been created, which a Vulkan
 // game never does -- so without this the pass runs and never reports what it cost.
 void EvaluateAfterUpscale(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* params,
-                          ID3D12CommandQueue* timingQueue = nullptr);
+                          ID3D12CommandQueue* timingQueue = nullptr, bool forcePost = false,
+                          unsigned long long submissionEpoch = 0);
+
+// Runs the same pass over Color immediately before Super Resolution consumes it. The call is a no-op
+// unless RunBeforeSR is enabled. Color is returned in its original readable state.
+void EvaluateBeforeUpscale(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* params,
+                           ID3D12CommandQueue* timingQueue = nullptr,
+                           unsigned long long submissionEpoch = 0);
 
 
 
