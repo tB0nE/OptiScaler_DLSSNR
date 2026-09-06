@@ -1617,6 +1617,19 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
 
     ID3D12Resource* target = output;
 
+    // Feature creation records GPU work too, and may return before the first evaluate.
+    // Guard the entire dispatch, not just the colour passes at the bottom. Otherwise
+    // creation/resize during an RE Engine loading screen captures NR's bindings as
+    // the game's state, or returns with those bindings still active.
+    const bool restoreRequired = cfg.RestoreComputeSignature.value_or_default() ||
+                                 cfg.RestoreGraphicSignature.value_or_default();
+    if (restoreRequired && !D3D12Hooks::CanRestoreRootSignature(cmdList))
+    {
+        ReportSkipOnce("the upscaler could not restore state this frame");
+        return;
+    }
+    ScopedNrStateEnvelope stateEnvelope(cmdList);
+
     // A completed upscaler output normally arrives as a UAV. The pre-SR colour input instead arrives
     // readable. Track every transition so both paths return the resource exactly as their caller gave
     // it to us; a pre-SR resource without UAV support is written through a scratch-and-copy fallback.
@@ -2160,29 +2173,6 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // represent -- it exists precisely because the proxy is meant to clip. Normalising the highlights
     // away first leaves it nothing to give back.
 
-    // On an engine that needs its compute state put back -- the bindless quirks -- the envelope can
-    // only restore what was captured. If nothing was captured for this list, the upscaler decided
-    // touching state was unsafe this frame, and binding the pass now would leave state the envelope
-    // cannot clean up. So on those games, skip the frame rather than corrupt it. Ordinary games do
-    // not require restore, so they are unaffected and the pass runs as before.
-    const bool restoreRequired = cfg.RestoreComputeSignature.value_or_default() ||
-                                 cfg.RestoreGraphicSignature.value_or_default();
-
-    if (restoreRequired && !D3D12Hooks::CanRestoreRootSignature(cmdList))
-    {
-        ReportSkipOnce("the upscaler could not restore state this frame");
-
-        // The device reference taken at the top of this function is released on every other path out.
-        // It was not released here, and this is the one path a bindless game takes every single frame
-        // -- so the game that most needed this skip was also leaking a device reference per frame.
-        device->Release();
-        return;
-    }
-
-    // From here on the pass binds its own root signature, heaps and pipeline. Everything below runs
-    // inside the envelope so the game's compute state is restored no matter which way this returns.
-    ScopedNrStateEnvelope stateEnvelope(cmdList);
-
     if (g_gpuTime == nullptr)
         g_gpuTime = std::make_unique<GpuTime_Dx12>(device);
 
@@ -2592,8 +2582,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     {
         tuningReported = true;
 
-        // At INFO, because whether the model actually took a value is the only way to tell a
-        // control that does nothing from one that is not being written.
+        // This checks the parameter table, not whether the neural network uses a
+        // setting. Multipass leaves the final pass's values in this shared table.
         auto report = [](const char* name, float wrote)
         {
             float value = 0.0f;
@@ -2602,11 +2592,16 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                      (uint32_t) r);
         };
 
-        const Config& rcfg = *Config::Instance();
-        report("DLSSNR.Intensity", rcfg.DlssNrIntensity.value_or_default());
-        report("DLSSNR.LocalStructureStrength", rcfg.DlssNrLocalStructure.value_or_default());
-        report("DLSSNR.LocalToneStrength", rcfg.DlssNrLocalTone.value_or_default());
-        report("DLSSNR.SkinStructureStrength", rcfg.DlssNrSkinStructure.value_or_default());
+        const auto lastTuning = PassTuning(cfg, effectivePasses - 1);
+        LOG_INFO("DLSS-NR parameter-table readback for pass {} (not proof of visual effect)", effectivePasses);
+        report("DLSSNR.Intensity", lastTuning.intensity);
+        report("DLSSNR.LocalStructureStrength", lastTuning.structure);
+        report("DLSSNR.LocalToneStrength", lastTuning.tone);
+        report("DLSSNR.SkinStructureStrength", lastTuning.skin);
+        unsigned int autoMask = 0;
+        const auto maskResult = g_nr.capabilityParams->Get("DLSSNR.UseAutoMask", &autoMask);
+        LOG_INFO("DLSS-NR AutoMask readback: {} (wrote {}, result 0x{:X})", autoMask,
+                 lastTuning.autoMask, (uint32_t) maskResult);
 
         unsigned int style = 0;
         const NVSDK_NGX_Result styleResult = g_nr.capabilityParams->Get("DLSSNR.Style", &style);
@@ -2639,6 +2634,13 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         resolveParams.Width = width;
         resolveParams.Height = height;
         resolveParams.TransferStrength = cfg.DlssNrTransferStrength.value_or_default();
+        const auto strength = [](float v) { return std::isfinite(v) ? std::clamp(v, 0.0f, 1.0f) : 1.0f; };
+        resolveParams.SkinProtection = cfg.DlssNrSkinProtection.value_or_default();
+        resolveParams.ShowSkinMask = cfg.DlssNrShowSkinMask.value_or_default();
+        resolveParams.SkinDetail = strength(cfg.DlssNrSkinDetail.value_or_default());
+        resolveParams.SkinColour = cfg.DlssNrSkinToneEnabled.value_or_default() ? strength(cfg.DlssNrSkinColour.value_or_default()) : 0.0f;
+        resolveParams.EnvironmentDetail = strength(cfg.DlssNrEnvironmentDetail.value_or_default());
+        resolveParams.EnvironmentColour = strength(cfg.DlssNrEnvironmentColour.value_or_default());
         resolveParams.ColourStrength = cfg.DlssNrColourStrength.value_or_default();
         resolveParams.DebugView = cfg.DlssNrDebugView.value_or_default();
         resolveParams.MaxRatio = cfg.DlssNrMaxRatio.value_or_default();

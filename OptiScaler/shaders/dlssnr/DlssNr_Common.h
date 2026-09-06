@@ -192,6 +192,13 @@ struct alignas(256) DlssNrConstants
     // preExposure * trim, so the live white point is ExposurePreMul / exposure. Mirrored in the cbuffer.
     uint32_t UseGameExposure;
     float ExposurePreMul;
+    // Optional colour-based final-composition mask. Not the runtime's semantic mask.
+    uint32_t SkinProtection;
+    uint32_t ShowSkinMask;
+    float SkinDetail;
+    float SkinColour;
+    float EnvironmentDetail;
+    float EnvironmentColour;
 };
 
 class DlssNr_Common

@@ -113,6 +113,7 @@ foreach ($d in @("Licenses", "OptiScaler")) {
 }
 
 Copy-Item $forwarder "$stage\nvngx.dll_dlssnr.dll" -Force
+Copy-Item -LiteralPath "$root\docs" -Destination "$stage\docs" -Recurse -Force
 
 # Logging on, in the release only.
 #

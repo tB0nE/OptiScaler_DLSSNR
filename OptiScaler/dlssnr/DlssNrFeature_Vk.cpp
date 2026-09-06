@@ -860,6 +860,13 @@ void EvaluateAfterUpscaleVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* para
     encode.ReversibleMode = cfg.DlssNrReversibleMode.value_or_default();
     encode.ApplyModel = cfg.DlssNrApplyModel.value_or_default() ? 1u : 0u;
     encode.TransferStrength = cfg.DlssNrTransferStrength.value_or_default();
+    const auto strength = [](float v) { return std::isfinite(v) ? std::clamp(v, 0.0f, 1.0f) : 1.0f; };
+    encode.SkinProtection = cfg.DlssNrSkinProtection.value_or_default();
+    encode.ShowSkinMask = cfg.DlssNrShowSkinMask.value_or_default();
+    encode.SkinDetail = strength(cfg.DlssNrSkinDetail.value_or_default());
+    encode.SkinColour = cfg.DlssNrSkinToneEnabled.value_or_default() ? strength(cfg.DlssNrSkinColour.value_or_default()) : 0.0f;
+    encode.EnvironmentDetail = strength(cfg.DlssNrEnvironmentDetail.value_or_default());
+    encode.EnvironmentColour = strength(cfg.DlssNrEnvironmentColour.value_or_default());
     encode.ColourStrength = cfg.DlssNrColourStrength.value_or_default();
     encode.MaxRatio = cfg.DlssNrMaxRatio.value_or_default();
     encode.Transfer = cfg.DlssNrTransfer.value_or_default();

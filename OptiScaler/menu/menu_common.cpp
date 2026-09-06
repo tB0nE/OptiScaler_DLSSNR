@@ -3055,6 +3055,19 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
 {
     auto& state = ctx.state;
     auto config = ctx.config;
+    bool external = config->ExternalFrameGeneration.value_or_default();
+    if (ImGui::Checkbox("External frame generation / MFG unlocker", &external))
+        config->ExternalFrameGeneration = external;
+    ShowHelpMarker("Leaves Streamline, Reflex and FG control to the game/external mod."
+                   "\nNR and NGX upscaling remain available. Save Settings and restart."
+                   "\nDoes not install an unlocker or enable FG in unsupported games.");
+    if (external != state.externalFrameGeneration)
+        ImGui::TextWrapped("Save Settings and restart to change frame-generation ownership.");
+    if (state.externalFrameGeneration)
+    {
+        ImGui::TextWrapped("External FG is active. Set the multiplier in the game or unlocker, not OptiScaler.");
+        return;
+    }
     auto& menuResScale = ctx.menuResScale;
     auto& primaryGpu = *ctx.primaryGpu;
 

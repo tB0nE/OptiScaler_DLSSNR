@@ -29,6 +29,12 @@ cbuffer Params : register(b0)
     uint  gApplyModel;     // 0 output the clean frame (pass still runs), 1 apply the model's edit
     uint  gUseGameExposure;// D3D12 source-1 only: 1 = read the game's live exposure in-shader (t4)
     float gExposurePreMul; // preExposure * trim, so the live white point is gExposurePreMul / exposure
+    uint  gSkinProtection;
+    uint  gShowSkinMask;
+    float gSkinDetail;
+    float gSkinColour;
+    float gEnvironmentDetail;
+    float gEnvironmentColour;
 };
 
 // Bringing an impossible colour back into a possible one.
@@ -51,6 +57,20 @@ cbuffer Params : register(b0)
 // theirs. See Licenses/RenoDX_ATTRIBUTION.txt.
 
 float SanitizeFinite(float v, float fallback) { return isfinite(v) ? v : fallback; }
+
+// Approximate skin-colour selection, not a face/skin segmentation network. Warm
+// materials may be selected and coloured lighting can hide skin. The preview is
+// deliberately exposed so users can check this before relying on protection.
+float SkinColourWeight(float3 rgb)
+{
+    rgb = saturate(rgb);
+    float y = dot(rgb, float3(0.299, 0.587, 0.114));
+    float cb = (rgb.b - y) * 0.564 + 0.5;
+    float cr = (rgb.r - y) * 0.713 + 0.5;
+    float2 distance = (float2(cb, cr) - float2(0.405, 0.600)) / float2(0.090, 0.110);
+    float chroma = max(rgb.r, max(rgb.g, rgb.b)) - min(rgb.r, min(rgb.g, rgb.b));
+    return (1.0 - smoothstep(0.55, 1.35, length(distance))) * smoothstep(0.02, 0.10, chroma);
+}
 
 float3 SanitizeFinite3(float3 v, float3 fallback)
 {
@@ -990,6 +1010,28 @@ void CSMain(uint3 id : SV_DispatchThreadID)
 
     // Back out of the normalised space the composition worked in.
     result *= normScale;
+
+    if (gSkinProtection != 0)
+    {
+        // Classify the untouched frame, never NR's recoloured output. Controls
+        // attenuate the final edit, including replace mode and all model passes.
+        float3 displayRgb = gPassthrough != 0 ? original : LinearToSrgb(saturate(original));
+        float mask = SkinColourWeight(displayRgb);
+        float detail = lerp(gEnvironmentDetail, gSkinDetail, mask);
+        float colour = lerp(gEnvironmentColour, gSkinColour, mask);
+        float baseY = dot(max(originalSample.rgb, 0.0), kLuma);
+        float editedY = dot(max(result, 0.0), kLuma);
+        float wantedY = lerp(baseY, editedY, detail);
+        float3 baseChroma = originalSample.rgb / max(baseY, 1e-6);
+        float3 editedChroma = result / max(editedY, 1e-6);
+        // Exact endpoints avoid changing the default image or fully protected pixels.
+        if (detail == 0.0 && colour == 0.0)
+            result = originalSample.rgb;
+        else if (detail != 1.0 || colour != 1.0)
+            result = ClampAp1(lerp(baseChroma, editedChroma, colour) * wantedY);
+        if (gShowSkinMask != 0)
+            result = mask.xxx * normScale;
+    }
 
     // The side being shown untouched takes the frame as it arrived, past every step above.
     if (showOriginal)

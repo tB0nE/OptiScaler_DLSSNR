@@ -196,6 +196,8 @@ static const QuirkEntry quirkTable[] = {
                 GameQuirk::RestoreComputeSigOnNvidia, GameQuirk::PregmataFixDLSSModes),
     QUIRK_ENTRY("onimushawots_demo.exe", GameQuirk::RestoreComputeSigOnNonNvidia, GameQuirk::DisableDxgiSpoofing,
                 GameQuirk::RestoreComputeSigOnNvidia),
+    QUIRK_ENTRY("onimushawots.exe", GameQuirk::RestoreComputeSigOnNonNvidia, GameQuirk::DisableDxgiSpoofing,
+                GameQuirk::RestoreComputeSigOnNvidia),
 
     // REF PDUpscaler branch
     // Old menu needed to avoid the invisible overlay while upscaling is active

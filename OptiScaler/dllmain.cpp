@@ -1859,6 +1859,21 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 #endif
 
         // Initial state of FG
+        State::Instance().externalFrameGeneration = Config::Instance()->ExternalFrameGeneration.value_or_default();
+        if (State::Instance().externalFrameGeneration)
+        {
+            // Only runtime overrides: preserve the user's OptiFG configuration for the next
+            // startup with External=false. Do not load a second FG provider or change Reflex.
+            auto* cfg = Config::Instance();
+            cfg->FGInput.set_volatile_value(FGInput::NoFG);
+            cfg->FGOutput.set_volatile_value(FGOutput::NoFG);
+            cfg->FGNvngxReplacement.set_volatile_value(FGNvngxReplacement::None);
+            cfg->FGEnabled.set_volatile_value(false);
+            cfg->ForceXeLL.set_volatile_value(false);
+            cfg->UseFakenvapi.set_volatile_value(false);
+            cfg->FN_ForceReflex.set_volatile_value(ForceReflex::InGame);
+            LOG_INFO("External frame generation: leaving Streamline/Reflex and MFG control to the game or unlocker; NR/SR remain available");
+        }
         State::Instance().activeFgInput = Config::Instance()->FGInput.value_or_default();
         State::Instance().activeFgOutput = Config::Instance()->FGOutput.value_or_default();
         State::Instance().activeFgNvngx = Config::Instance()->FGNvngxReplacement.value_or_default();

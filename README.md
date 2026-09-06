@@ -27,6 +27,18 @@ Downloads:
 
 NVIDIA's proprietary `nvngx_dlssnr.dll` is required but is **not redistributed** here.
 
+### New compatibility work (not yet game-validated)
+
+- Optional skin-colour protection with separate skin/environment lighting and colour controls.
+  This is a colour-based filter, not a face detector. The model's AutoMask remains a separate control.
+- An **External frame generation / MFG unlocker** mode that leaves Streamline and Reflex to the game
+  or external mod. [RTX 40 unlocker instructions and optional pinned source build](docs/RTX40-MFG.md).
+- The retail Onimusha executable gets the same engine-state workaround as the demo. NR model creation
+  is now inside the graphics-state restore envelope as well as evaluation.
+
+See [what changed, limitations and tests](docs/NR-COMPATIBILITY.md). These changes are not in the older
+v0.5 download listed above. The RTX 40 unlocker is a separate optional component, not enabled by default.
+
 ### GPU and runtime compatibility
 
 The Neural Rendering network can run on RTX 20, 30, 40, and 50-series GPUs, but not with the same

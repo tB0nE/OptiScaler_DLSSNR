@@ -438,10 +438,14 @@ void RenderMenu(Config* config, float menuResScale)
             DeferredSlider("Local structure", &config->DlssNrLocalStructure, 0.0f, 2.0f, 1.0f);
             DeferredSlider("Local tone", &config->DlssNrLocalTone, 0.0f, 2.0f, 1.0f);
             DeferredSlider("Skin structure", &config->DlssNrSkinStructure, -1.0f, 2.0f, -1.0f);
-            HelpMarker("-1 follows local structure. Higher values control skin independently.");
+            HelpMarker("-1 follows local structure; 0 reduces skin structure independently."
+                       "\nThis is not a skin-colour/tone off switch. Use the final skin/scene controls below for that.");
             bool mask = config->DlssNrAutoMask.value_or_default();
             if (ImGui::Checkbox("Auto skin mask", &mask))
                 config->DlssNrAutoMask = mask;
+            HelpMarker("NVIDIA's internal automatic mask, not the colour-based preview below."
+                       "\nWith Skin structure=-1 it follows general structure, so the difference may be subtle."
+                       "\nTry Skin structure=0 versus Local structure=1 to compare. Mask accuracy is model-dependent.");
             ImGui::TreePop();
         }
 
@@ -494,6 +498,36 @@ void RenderMenu(Config* config, float menuResScale)
         ImGui::TextWrapped("Per-pass overrides apply to the DX12 multipass path, including NR after RR. Native Vulkan and the driver-proxy backend remain single-pass.");
 
         ImGui::SeparatorText("Colour");
+
+        if (ImGui::TreeNode("Skin and environment (final edit)"))
+        {
+            ImGui::TextWrapped("Optional colour-based selection, NOT NVIDIA's automatic skin mask. Warm scenery can be selected and coloured lighting can hide skin. Check the preview. These controls affect the combined result of all passes.");
+            bool filter = config->DlssNrSkinProtection.value_or_default();
+            if (ImGui::Checkbox("Separate skin / environment controls", &filter))
+                config->DlssNrSkinProtection = filter;
+            ImGui::BeginDisabled(!filter);
+            bool tone = config->DlssNrSkinToneEnabled.value_or_default();
+            if (ImGui::Checkbox("Allow skin tone / colour changes", &tone))
+                config->DlssNrSkinToneEnabled = tone;
+            HelpMarker("Off preserves colour in selected pixels; lighting/detail can still change."
+                       "\nAlso set Skin detail / lighting to 0 to suppress both.");
+            const auto slider = [](const char* label, auto& option) {
+                float v = option.value_or_default();
+                if (ImGui::SliderFloat(label, &v, 0.0f, 1.0f, "%.2f"))
+                    option = v;
+            };
+            slider("Skin detail / lighting", config->DlssNrSkinDetail);
+            ImGui::BeginDisabled(!tone);
+            slider("Skin colour", config->DlssNrSkinColour);
+            ImGui::EndDisabled();
+            slider("Environment detail / lighting", config->DlssNrEnvironmentDetail);
+            slider("Environment colour", config->DlssNrEnvironmentColour);
+            bool preview = config->DlssNrShowSkinMask.value_or_default();
+            if (ImGui::Checkbox("Preview colour-based mask", &preview))
+                config->DlssNrShowSkinMask = preview;
+            ImGui::EndDisabled();
+            ImGui::TreePop();
+        }
 
         ImGui::TextDisabled("The model was trained on finished, sRGB-encoded frames. The upscaler's\n"
                             "output is not one: it is linear and open-ended. These decide how it is\n"

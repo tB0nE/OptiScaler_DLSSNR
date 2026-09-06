@@ -68,6 +68,7 @@ bool Config::Reload(std::filesystem::path iniPath)
         // Frame Generation
         {
             FGEnabled.set_from_config(readBool("FrameGen", "Enabled"));
+            ExternalFrameGeneration.set_from_config(readBool("FrameGen", "External"));
             FGDebugView.set_from_config(readBool("FrameGen", "DebugView"));
 
             if (auto FGInputString = readString("FrameGen", "FGInput"); FGInputString.has_value())
@@ -373,6 +374,13 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrLocalTone.set_from_config(readFloat("DlssNr", "LocalTone"));
             DlssNrSkinStructure.set_from_config(readFloat("DlssNr", "SkinStructure"));
             DlssNrAutoMask.set_from_config(readBool("DlssNr", "AutoMask"));
+            DlssNrSkinProtection.set_from_config(readBool("DlssNr", "SkinProtection"));
+            DlssNrSkinToneEnabled.set_from_config(readBool("DlssNr", "SkinToneEnabled"));
+            DlssNrSkinDetail.set_from_config(readFloat("DlssNr", "SkinDetail"));
+            DlssNrSkinColour.set_from_config(readFloat("DlssNr", "SkinColour"));
+            DlssNrEnvironmentDetail.set_from_config(readFloat("DlssNr", "EnvironmentDetail"));
+            DlssNrEnvironmentColour.set_from_config(readFloat("DlssNr", "EnvironmentColour"));
+            DlssNrShowSkinMask.set_from_config(readBool("DlssNr", "ShowSkinMask"));
             DlssNrPass2Intensity.set_from_config(readFloat("DlssNr", "Pass2Intensity"));
             DlssNrPass2LocalStructure.set_from_config(readFloat("DlssNr", "Pass2LocalStructure"));
             DlssNrPass2LocalTone.set_from_config(readFloat("DlssNr", "Pass2LocalTone"));
@@ -951,6 +959,7 @@ bool Config::SaveIni()
     // Frame Generation
     {
         ini.SetValue("FrameGen", "Enabled", GetBoolValue(Instance()->FGEnabled.value_for_config()).c_str());
+        ini.SetValue("FrameGen", "External", GetBoolValue(Instance()->ExternalFrameGeneration.value_for_config()).c_str());
         ini.SetValue("FrameGen", "DebugView", GetBoolValue(Instance()->FGDebugView.value_for_config()).c_str());
         std::string FGInputString = "auto";
         if (auto FGInputHeld = Instance()->FGInput.value_for_config(); FGInputHeld.has_value())
@@ -1290,6 +1299,13 @@ bool Config::SaveIni()
     ini.SetValue("DlssNr", "SkinStructure",
                  GetFloatValue(Instance()->DlssNrSkinStructure.value_for_config()).c_str());
     ini.SetValue("DlssNr", "AutoMask", GetBoolValue(Instance()->DlssNrAutoMask.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "SkinProtection", GetBoolValue(Instance()->DlssNrSkinProtection.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "SkinToneEnabled", GetBoolValue(Instance()->DlssNrSkinToneEnabled.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "SkinDetail", GetFloatValue(Instance()->DlssNrSkinDetail.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "SkinColour", GetFloatValue(Instance()->DlssNrSkinColour.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "EnvironmentDetail", GetFloatValue(Instance()->DlssNrEnvironmentDetail.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "EnvironmentColour", GetFloatValue(Instance()->DlssNrEnvironmentColour.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "ShowSkinMask", GetBoolValue(Instance()->DlssNrShowSkinMask.value_for_config()).c_str());
     ini.SetValue("DlssNr", "Pass2Intensity", GetFloatValue(Instance()->DlssNrPass2Intensity.value_for_config()).c_str());
     ini.SetValue("DlssNr", "Pass2LocalStructure", GetFloatValue(Instance()->DlssNrPass2LocalStructure.value_for_config()).c_str());
     ini.SetValue("DlssNr", "Pass2LocalTone", GetFloatValue(Instance()->DlssNrPass2LocalTone.value_for_config()).c_str());

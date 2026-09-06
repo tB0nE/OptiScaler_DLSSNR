@@ -282,6 +282,14 @@ class Config
     // -1 means follow local structure, which is the model's own default. It is not a strength of zero.
     CustomOptional<float> DlssNrSkinStructure { -1.0f };
     CustomOptional<bool> DlssNrAutoMask { true };
+    // Optional final-composition filter, not NVIDIA's semantic auto mask.
+    CustomOptional<bool> DlssNrSkinProtection { false };
+    CustomOptional<bool> DlssNrSkinToneEnabled { true };
+    CustomOptional<float> DlssNrSkinDetail { 1.0f };
+    CustomOptional<float> DlssNrSkinColour { 1.0f };
+    CustomOptional<float> DlssNrEnvironmentDetail { 1.0f };
+    CustomOptional<float> DlssNrEnvironmentColour { 1.0f };
+    CustomOptional<bool> DlssNrShowSkinMask { false };
     CustomOptional<float, NoDefault> DlssNrPass2Intensity;
     CustomOptional<float, NoDefault> DlssNrPass2LocalStructure;
     CustomOptional<float, NoDefault> DlssNrPass2LocalTone;
@@ -784,6 +792,7 @@ class Config
 
     // Frame Generation
     CustomOptional<FGInput> FGInput { FGInput::NoFG };
+    CustomOptional<bool> ExternalFrameGeneration { false };
     CustomOptional<FGOutput> FGOutput { FGOutput::NoFG };
     CustomOptional<FGNvngxReplacement> FGNvngxReplacement { FGNvngxReplacement::None };
     CustomOptional<bool> FGDrawUIOverFG { false };
