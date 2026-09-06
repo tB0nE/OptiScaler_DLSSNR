@@ -12,7 +12,12 @@ The upstream fork already provided experimental direct access to NVIDIA DLSS Neu
 - **Matching overlay and INI controls.** `RunBeforeSR` and `Passes` are exposed in both configuration and the OptiScaler overlay.
 - **Verified BG3 path.** Baldur's Gate 3 was tested with two neural passes at 1920x1080 followed by DLSS Super Resolution to 3840x2160.
 
-Download the exact tested BG3 package from the [BG3 pre-SR multipass release](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/bg3-presr-multipass-e16d5866). NVIDIA's proprietary `nvngx_dlssnr.dll` is required but is **not redistributed** here.
+Downloads:
+
+- [General experimental package with per-pass profiles](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/general-per-pass-profiles-facc24f6) — game-neutral defaults; build-tested, published as a prerelease while broader runtime reports come in.
+- [Exact original BG3-tested package](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/bg3-presr-multipass-e16d5866) — the earlier build used for the 1920x1080 to 3840x2160 validation.
+
+NVIDIA's proprietary `nvngx_dlssnr.dll` is required but is **not redistributed** here.
 
 Implementation details and safety invariants are documented in [the pre-SR multipass design note](OptiScaler/dlssnr/design/pre-sr-multipass.md). The remainder of this README is the upstream OptiScaler documentation.
 
