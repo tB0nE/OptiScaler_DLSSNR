@@ -10,10 +10,14 @@ The upstream fork already provided experimental direct access to NVIDIA DLSS Neu
 - **Per-pass model profiles.** Passes 2 and 3 can inherit pass 1 or select their own built-in preset and style (`standard`, `natural`, or `cinematic`) without loading competing model DLLs.
 - **Guarded fallbacks.** Ray Reconstruction remains post-SR, and padded or offset dynamic-resolution inputs fall back to the existing post-SR path instead of using unsafe dimensions.
 - **Matching overlay and INI controls.** `RunBeforeSR` and `Passes` are exposed in both configuration and the OptiScaler overlay.
+- **Optional NR after native Ray Reconstruction (DX12).** Enable `ApplyAfterRR` separately;
+  `RRPasses` defaults to 1 and `RRWorkingScale` to 0.5 of RR's output dimensions. RR keeps its
+  original noisy inputs, and NR history is rebuilt when switching between SR and RR.
 - **Verified BG3 path.** Baldur's Gate 3 was tested through the `bg3_dx11.exe` D3D11-to-D3D12 bridge with two neural passes at 1920x1080 followed by DLSS Super Resolution to 3840x2160.
 
 Downloads:
 
+- [Native RR controls preview](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.4.0-rr-preview) — compiled experimental build with independent NR-after-RR controls. In-game RR/NR validation is pending.
 - [Portable cross-generation package](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.3.0-crossgen-portable) — the complete installer and backend layout, with game-neutral defaults and RTX 20/30/40/50 runtime guidance.
 - The earlier `general-per-pass-profiles-facc24f6` and `bg3-presr-multipass-e16d5866` packages are retained only as historical validation artifacts. They are incomplete for a clean installation and should not be redistributed.
 

@@ -318,6 +318,9 @@ bool Config::Reload(std::filesystem::path iniPath)
             // --- DLSS 5 Neural Rendering (OptiScaler/dlssnr) ---
             DlssNrEnabled.set_from_config(readBool("DlssNr", "Enabled"));
             DlssNrRunBeforeSr.set_from_config(readBool("DlssNr", "RunBeforeSR"));
+            DlssNrApplyAfterRR.set_from_config(readBool("DlssNr", "ApplyAfterRR"));
+            DlssNrRRPasses.set_from_config(readUInt("DlssNr", "RRPasses"));
+            DlssNrRRWorkingScale.set_from_config(readFloat("DlssNr", "RRWorkingScale"));
             DlssNrToggleKey.set_from_config(readInt("DlssNr", "ToggleKey"));
             DlssNrTransferStrength.set_from_config(readFloat("DlssNr", "TransferStrength"));
             DlssNrColourStrength.set_from_config(readFloat("DlssNr", "ColourStrength"));
@@ -1205,6 +1208,12 @@ bool Config::SaveIni()
     ini.SetValue("DlssNr", "Enabled", GetBoolValue(Instance()->DlssNrEnabled.value_for_config()).c_str());
     ini.SetValue("DlssNr", "RunBeforeSR",
                  GetBoolValue(Instance()->DlssNrRunBeforeSr.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "ApplyAfterRR",
+                 GetBoolValue(Instance()->DlssNrApplyAfterRR.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "RRPasses",
+                 GetIntValue(Instance()->DlssNrRRPasses.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "RRWorkingScale",
+                 GetFloatValue(Instance()->DlssNrRRWorkingScale.value_for_config()).c_str());
     {
         auto toggle = Instance()->DlssNrToggleKey.value_for_config();
         ini.SetValue("DlssNr", "ToggleKey", GetIntValue(toggle, toggle > 0).c_str());

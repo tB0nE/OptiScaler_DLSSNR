@@ -260,6 +260,9 @@ class Config
     // Run the NR pass on the upscaler's colour input, at render resolution, immediately before SR.
     // Off preserves the v0.2.0 post-upscale placement.
     CustomOptional<bool> DlssNrRunBeforeSr { false };
+    CustomOptional<bool> DlssNrApplyAfterRR { false };
+    CustomOptional<unsigned int> DlssNrRRPasses { 1 };
+    CustomOptional<float> DlssNrRRWorkingScale { 0.5f };
     // Toggles the pass in game. Unbound by default -- a key that does something unexpected is worse
     // than one that does nothing.
     CustomOptional<int> DlssNrToggleKey { UnboundKey };

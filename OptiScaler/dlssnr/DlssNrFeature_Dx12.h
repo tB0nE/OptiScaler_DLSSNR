@@ -32,6 +32,8 @@ inline constexpr unsigned int MaxPassCount = 3;
 // timingQueue is the queue this command list will be executed on, when the caller knows it.
 // State::currentCommandQueue only exists once a D3D12 swapchain has been created, which a Vulkan
 // game never does -- so without this the pass runs and never reports what it cost.
+// forcePost identifies an RR feature: selects ApplyAfterRR, RRPasses and RRWorkingScale.
+// Do not set it for ordinary SR fallback; that decision is made from Color's active subrect.
 void EvaluateAfterUpscale(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* params,
                           ID3D12CommandQueue* timingQueue = nullptr, bool forcePost = false,
                           unsigned long long submissionEpoch = 0);

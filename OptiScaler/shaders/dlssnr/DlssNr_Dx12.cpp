@@ -330,6 +330,7 @@ struct NrState
     unsigned int width = 0;
     unsigned int height = 0;
     bool beforeUpscale = false;
+    bool afterRayReconstruction = false;
     bool reset = true;
 
     // Dimensions of the guides as the upscaler handed them over, kept for the present path, which runs
@@ -1722,13 +1723,18 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // the model runs reduced and cheaper; above 1 it SUPERSAMPLES -- the proxy is upscaled to a larger
     // working size so the model denoises a super-native input, which the resolve then samples back down.
     // Capped at 2x: cost grows with the area and NGX acceptance above native is what this probe tests.
-    float workScale = cfg.DlssNrWorkingScale.value_or_default();
+    float workScale = frame.AfterRayReconstruction ? cfg.DlssNrRRWorkingScale.value_or_default()
+                                                  : cfg.DlssNrWorkingScale.value_or_default();
+    if (!std::isfinite(workScale))
+        workScale = frame.AfterRayReconstruction ? 0.5f : 1.0f;
     workScale = workScale < 0.25f ? 0.25f : (workScale > 2.0f ? 2.0f : workScale);
     const auto workWidth = (unsigned int) (width * workScale + 0.5f);
     const auto workHeight = (unsigned int) (height * workScale + 0.5f);
     const bool reduced = workWidth != width || workHeight != height;
     const unsigned int configuredPasses =
-        std::clamp(cfg.DlssNrPasses.value_or_default(), 1u, DlssNr::MaxPassCount);
+        std::clamp(frame.AfterRayReconstruction ? cfg.DlssNrRRPasses.value_or_default()
+                                               : cfg.DlssNrPasses.value_or_default(),
+                   1u, DlssNr::MaxPassCount);
     const bool proxyBackend = cfg.DlssNrUseProxy.value_or_default();
     const unsigned int requestedPasses = proxyBackend ? 1u : configuredPasses;
 
@@ -1747,7 +1753,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
 
     const bool resolutionChanged = g_nr.width != width || g_nr.height != height ||
                                    g_nr.workWidth != workWidth || g_nr.workHeight != workHeight;
-    const bool placementChanged = g_nr.feature != nullptr && g_nr.beforeUpscale != frame.BeforeUpscale;
+    const bool placementChanged = g_nr.feature != nullptr &&
+        (g_nr.beforeUpscale != frame.BeforeUpscale ||
+         g_nr.afterRayReconstruction != frame.AfterRayReconstruction);
 
     // The model reads its tuning once, while the feature is built, so a changed setting only takes
     // effect when the feature is rebuilt. TuningMatchesFeature was written to notice that and then
@@ -1901,13 +1909,16 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         g_nr.width = width;
         g_nr.height = height;
         g_nr.beforeUpscale = frame.BeforeUpscale;
+        g_nr.afterRayReconstruction = frame.AfterRayReconstruction;
         g_nr.reset = true;
         g_nr.featurePendingSubmission = true;
         g_nr.featureCreateEpoch = frame.SubmissionEpoch;
         RecordBuiltPrimaryTuning(cfg);
-        LOG_INFO("DLSS-NR running {} SR: target {}x{}, model {}x{}, guides {}x{} "
+        LOG_INFO("DLSS-NR running {}: target {}x{}, model {}x{}, guides {}x{} "
                  "(preset {}, intensity {}, style {}, build epoch {})",
-                 frame.BeforeUpscale ? "before" : "after", width, height, workWidth, workHeight,
+                 frame.AfterRayReconstruction ? "after Ray Reconstruction" :
+                     (frame.BeforeUpscale ? "before SR" : "after SR"),
+                 width, height, workWidth, workHeight,
                  guideWidth, guideHeight, g_nr.builtPreset[0], g_nr.builtIntensity, g_nr.builtStyle[0],
                  frame.SubmissionEpoch);
 
@@ -2837,6 +2848,14 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
         return;
     }
 
+    // forcePost is supplied only for a native RR feature by the NGX and bridge callers.
+    // RR already reconstructs and upscales; never edit its noisy input or inherit SR's multipass cost.
+    if (forcePost && !cfg.DlssNrApplyAfterRR.value_or_default())
+    {
+        ReportSkipOnce("Ray Reconstruction is active; enable ApplyAfterRR to process its output");
+        return;
+    }
+
     // Ray Reconstruction is explicitly forced post: PR #6 reports that pre-SR placement does not work
     // with DLSSD's input contract. Padded/offset Color inputs also stay post until the colour codec can
     // address subrect origins: processing their whole allocation would run the wrong raster and touch
@@ -2929,6 +2948,7 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
     DlssNrFrameInfo frame {};
     frame.DepthInverted = (createFlags & NVSDK_NGX_DLSS_Feature_Flags_DepthInverted) != 0;
     frame.BeforeUpscale = beforeUpscale;
+    frame.AfterRayReconstruction = forcePost;
     frame.SubmissionEpoch = timingQueue != nullptr ? submissionEpoch : State::Instance().frameCount;
 
     // Color and Output may use different formats even though DLSS treats them as the same frame colour

@@ -128,10 +128,28 @@ void RenderMenu(Config* config, float menuResScale)
         HelpMarker("Runs Neural Rendering on the render-resolution colour input immediately before"
                    "\nSuper Resolution, so SR temporally accumulates and upscales the enhanced frame."
                    "\n\nRay Reconstruction is deliberately excluded: its input contract differs and"
-                   "\ncontinues to use the post-upscale Neural Rendering path. Padded or offset"
+                   "\nuses the separate Apply after Ray Reconstruction option. Padded or offset"
                    "\ndynamic-resolution inputs also fall back post-upscale for safety."
                    "\n\nThis placement control currently applies to the Direct3D 12 path and its"
                    "\nDirect3D 11/Vulkan bridges; native Vulkan keeps the post-upscale path.");
+
+        bool afterRR = config->DlssNrApplyAfterRR.value_or_default();
+        if (ImGui::Checkbox("Apply after Ray Reconstruction (DX12)", &afterRR))
+            config->DlssNrApplyAfterRR = afterRR;
+        HelpMarker("Requires the game's native Ray Reconstruction option. RR denoises and upscales"
+                   "\nfirst; NR then processes its output before frame generation."
+                   "\nThis does not add RR to games without the required rendering buffers."
+                   "\nIndependent controls below prevent inheriting the cost of the SR configuration."
+                   "\nNative Vulkan does not use these DX12 controls.");
+        int rrPasses = (int) config->DlssNrRRPasses.value_or_default();
+        if (ImGui::SliderInt("NR passes after RR", &rrPasses, 1, (int) MaxPassCount))
+            config->DlssNrRRPasses = (unsigned int) rrPasses;
+        float rrScale = config->DlssNrRRWorkingScale.value_or_default();
+        if (ImGui::SliderFloat("NR model scale after RR", &rrScale, 0.25f, 2.0f, "%.2fx"))
+            config->DlssNrRRWorkingScale = rrScale;
+        HelpMarker("Relative to RR's OUTPUT resolution: 0.50x at 4K runs NR at 1920x1080."
+                   "\nRR itself remains full quality. The NR edit is resized for final composition."
+                   "\nPasses 2 and 3 use the same per-pass model profiles as the SR path.");
 
         // The toggle can be bound to a key, and nobody would think to look for it under Keybinds
         // unless told. Dimmed, because it is a note rather than a setting.

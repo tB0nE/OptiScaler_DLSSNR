@@ -207,6 +207,12 @@ if exist %selectedFilename% (
 
 REM Wine doesn't support powershell
 :checkWine
+if /i %selectedFilename%=="d3d12.dll" (
+    echo WARNING: This proxy has a reported Streamline conflict that can grey out
+    echo Cyberpunk's Ray Reconstruction option. Try dxgi.dll or another compatible
+    echo proxy if that happens. Back up existing ReShade or other loaders first.
+    echo See INSTALL-DLSSNR.md for the confirmed upstream report.
+)
 reg query HKEY_CURRENT_USER\Software\Wine\DllOverrides >nul 2>&1
 if %errorlevel%==0 (
     echo.

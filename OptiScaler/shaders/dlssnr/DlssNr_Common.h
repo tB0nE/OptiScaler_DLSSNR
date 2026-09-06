@@ -74,6 +74,8 @@ struct DlssNrFrameInfo
     // a UAV. The DX12 pass uses this to preserve the caller's state and to fall back through a copy
     // when a pre-SR colour resource was not created with UAV support.
     bool BeforeUpscale = false;
+    // A native RR result selects independent NR cost controls and a separate history lifecycle.
+    bool AfterRayReconstruction = false;
 
     // Submission epoch supplied by the caller. Native DX12 uses the wrapped swapchain Present count;
     // the DX11/Vulkan bridges use their successfully submitted frame counter. A feature created in an

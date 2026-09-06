@@ -83,6 +83,34 @@ OptiScaler into pass-through mode, which means no menu and no Neural Rendering.
 Do not install the RenoDX DLSS add-on merely to obtain its compatibility runtime. This OptiScaler
 fork drives `nvngx_dlssnr.dll` itself, and two Neural Rendering injectors can conflict.
 
+## Neural Rendering with native Ray Reconstruction
+
+In a game that already supports RR, enable RR in the game's settings and enable
+**Apply after Ray Reconstruction (DX12)** in OptiScaler's Neural Rendering menu. The master
+**Enable Neural Rendering** switch must also be on. Equivalent INI settings:
+
+```ini
+[DlssNr]
+Enabled=true
+ApplyAfterRR=true
+RRPasses=1
+RRWorkingScale=0.5
+```
+
+RR reconstructs and upscales first. NR then processes that output before frame generation.
+`RunBeforeSR` does not override this order. At 4K output, `RRWorkingScale=0.5` runs NR at
+1920x1080 and resizes its edit for composition; it does not reduce RR's own resolution.
+`RRPasses=1..3` is independent of ordinary `Passes`, while per-pass model profiles are shared.
+Switching between SR and RR rebuilds NR history even when their dimensions match.
+These controls apply to D3D12 and its bridges, not the upstream native Vulkan NR path.
+
+If Cyberpunk's RR option is greyed out with this fork, avoid the `d3d12.dll` proxy: an
+[upstream report](https://github.com/Dagherbou/OptiScaler_DLSSNR/issues/8) confirmed that using
+`dxgi.dll` resolved a Streamline conflict. Back up existing loaders before changing the proxy.
+Keep the game's genuine `nvngx_dlssd.dll` (RR) separate from `nvngx_dlssnr.dll` (NR).
+For an RR-only comparison, disable the master NR switch; “Apply the model” merely hides the edit
+and still incurs NR's GPU cost. Successful RR initialization alone does not prove image quality.
+
 ## Diagnose a missing menu
 
 Set:
