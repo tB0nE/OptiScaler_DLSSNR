@@ -22,6 +22,7 @@ The upstream fork already provided experimental direct access to NVIDIA DLSS Neu
 
 Downloads:
 
+- [Padded-input fix preview — v0.6.1](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.6.1-padded-presr) — complete package with the padded pre-SR fix, earlier skin/MFG compatibility changes and the verified FG downloader. Build/GPU-copy tested; Dawnwalker validation is pending. NVIDIA NR/FG runtimes are not bundled.
 - [Per-pass controls preview](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.5.0-pass-controls-preview) — reorganized pass sections and independent model strengths, including the RR controls. Runtime validation is pending.
 - [Native RR controls preview](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.4.0-rr-preview) — compiled experimental build with independent NR-after-RR controls. In-game RR/NR validation is pending.
 - [Portable cross-generation package](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.3.0-crossgen-portable) — the complete installer and backend layout, with game-neutral defaults and RTX 20/30/40/50 runtime guidance.
@@ -39,10 +40,10 @@ Get the files from NVIDIA's [Streamline 2.12.0 release](https://github.com/NVIDI
 ([official SDK ZIP](https://github.com/NVIDIA-RTX/Streamline/releases/download/v2.12.0/streamline-sdk-v2.12.0.zip)).
 Our helper downloads that exact ZIP and verifies its checksum, all six DLL hashes and NVIDIA signatures.
 
-1. Install a complete OptiScaler release first. The older downloads above do not contain this helper.
-2. Download this repo's [source ZIP](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/archive/refs/heads/main.zip)
+1. Install a complete OptiScaler release first. The v0.6.1 preview includes this helper; v0.5 and earlier do not.
+2. If your release lacks the helper, download this repo's [source ZIP](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/archive/refs/heads/main.zip)
    and extract it into a **separate working folder**, not over the game. Open PowerShell in the
-   extracted folder containing `get_streamline.ps1` and `redist`.
+   folder containing `get_streamline.ps1` and `redist` (the installed release folder if already present).
 3. Close the game, back up its OptiScaler setup, read the linked NVIDIA licences, then run the
    following command with your game's real executable directory in place of the example:
 
