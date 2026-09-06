@@ -43,21 +43,23 @@ static void HelpMarker(const char* tip)
 // live under the cursor; only the commit that triggers the rebuild waits for release. Cheap controls
 // that are just shader constants (detail, colour, paper white) do not use this -- they can afford to
 // apply live.
-static bool DeferredSlider(const char* label, CustomOptional<float>* opt, float mn, float mx,
-                           float def, const char* fmt = "%.2f")
+template <typename Option>
+static bool DeferredSlider(const char* label, Option* opt, float mn, float mx,
+                           float def, const char* fmt = "%.2f", bool inheritReset = false)
 {
-    static std::unordered_map<std::string, float> pending;
+    static std::unordered_map<ImGuiID, float> pending;
+    const ImGuiID id = ImGui::GetID(label);
 
-    auto it = pending.find(label);
-    float value = it != pending.end() ? it->second : opt->value_or_default();
+    auto it = pending.find(id);
+    float value = it != pending.end() ? it->second : (opt->has_value() ? opt->value() : def);
     bool changed = false;
 
     if (ImGui::SliderFloat(label, &value, mn, mx, fmt))
-        pending[label] = value;
+        pending[id] = value;
 
     if (ImGui::IsItemDeactivatedAfterEdit())
     {
-        auto committed = pending.find(label);
+        auto committed = pending.find(id);
 
         if (committed != pending.end())
         {
@@ -72,8 +74,11 @@ static bool DeferredSlider(const char* label, CustomOptional<float>* opt, float 
     const std::string resetId = std::string("Reset##") + label;
     if (ImGui::SmallButton(resetId.c_str()))
     {
-        *opt = def;
-        pending.erase(std::string(label));   // drop any in-flight drag so the reset actually sticks
+        if (inheritReset)
+            *opt = std::optional<float> {};
+        else
+            *opt = def;
+        pending.erase(id);
         changed = true;
     }
 
@@ -419,82 +424,74 @@ void RenderMenu(Config* config, float menuResScale)
                        "\nstable. If you love the Replace look but the flicker bothers you, use this."
                        "\n\nOff is byte-identical to before.");
 
-        ImGui::SeparatorText("Model");
+        ImGui::SeparatorText("Model passes");
+        ImGui::TextWrapped("Each pass has its own style and model strengths. Changes apply when you release a slider.");
+        static const char* styles[] = { "Standard", "Natural", "Cinematic" };
+        static const char* inheritedStyles[] = { "Auto (inherit pass 1)", "Standard", "Natural", "Cinematic" };
 
-        ImGui::TextUnformatted("Read when the model is built, so a change rebuilds it after a moment.");
+        if (ImGui::TreeNodeEx("Pass 1", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            int style = (int) std::min(config->DlssNrStyle.value_or_default(), 2u);
+            if (ImGui::Combo("Style", &style, styles, IM_ARRAYSIZE(styles)))
+                config->DlssNrStyle = (uint32_t) style;
+            DeferredSlider("Intensity", &config->DlssNrIntensity, 0.0f, 2.0f, 1.0f);
+            DeferredSlider("Local structure", &config->DlssNrLocalStructure, 0.0f, 2.0f, 1.0f);
+            DeferredSlider("Local tone", &config->DlssNrLocalTone, 0.0f, 2.0f, 1.0f);
+            DeferredSlider("Skin structure", &config->DlssNrSkinStructure, -1.0f, 2.0f, -1.0f);
+            HelpMarker("-1 follows local structure. Higher values control skin independently.");
+            bool mask = config->DlssNrAutoMask.value_or_default();
+            if (ImGui::Checkbox("Auto skin mask", &mask))
+                config->DlssNrAutoMask = mask;
+            ImGui::TreePop();
+        }
 
-        static const char* nrPresetNames[] = { "Default", "Preset 1", "Preset 2", "Preset 3" };
-        int preset = (int) config->DlssNrPreset.value_or_default();
-        if (ImGui::Combo("Pass 1 model preset", &preset, nrPresetNames, IM_ARRAYSIZE(nrPresetNames)))
-            config->DlssNrPreset = (uint32_t) preset;
+        if (ImGui::TreeNodeEx("Pass 2", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::TextWrapped("Unset controls inherit pass 1, except local tone which defaults to 0. Reset restores this behavior. Only active passes run.");
+            InheritedProfileCombo("Style", &config->DlssNrPass2Style, inheritedStyles, IM_ARRAYSIZE(inheritedStyles));
+            DeferredSlider("Intensity", &config->DlssNrPass2Intensity, 0.0f, 2.0f, config->DlssNrIntensity.value_or_default(), "%.2f", true);
+            DeferredSlider("Local structure", &config->DlssNrPass2LocalStructure, 0.0f, 2.0f, config->DlssNrLocalStructure.value_or_default(), "%.2f", true);
+            DeferredSlider("Local tone", &config->DlssNrPass2LocalTone, 0.0f, 2.0f, 0.0f, "%.2f", true);
+            DeferredSlider("Skin structure", &config->DlssNrPass2SkinStructure, -1.0f, 2.0f, config->DlssNrSkinStructure.value_or_default(), "%.2f", true);
+            bool mask = config->DlssNrPass2AutoMask.has_value() ? config->DlssNrPass2AutoMask.value() : config->DlssNrAutoMask.value_or_default();
+            if (ImGui::Checkbox("Auto skin mask", &mask))
+                config->DlssNrPass2AutoMask = mask;
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Reset##mask"))
+                config->DlssNrPass2AutoMask = std::optional<bool> {};
+            ImGui::TreePop();
+        }
 
-        HelpMarker("Default leaves the choice to the model."
-                       "\n\nNot the same scale as the super resolution or ray reconstruction presets --"
-                       "\nthe same number means something different here.");
+        if (ImGui::TreeNodeEx("Pass 3", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::TextWrapped("Unset controls inherit pass 1, except local tone which defaults to 0. Reset restores this behavior. Only active passes run.");
+            InheritedProfileCombo("Style", &config->DlssNrPass3Style, inheritedStyles, IM_ARRAYSIZE(inheritedStyles));
+            DeferredSlider("Intensity", &config->DlssNrPass3Intensity, 0.0f, 2.0f, config->DlssNrIntensity.value_or_default(), "%.2f", true);
+            DeferredSlider("Local structure", &config->DlssNrPass3LocalStructure, 0.0f, 2.0f, config->DlssNrLocalStructure.value_or_default(), "%.2f", true);
+            DeferredSlider("Local tone", &config->DlssNrPass3LocalTone, 0.0f, 2.0f, 0.0f, "%.2f", true);
+            DeferredSlider("Skin structure", &config->DlssNrPass3SkinStructure, -1.0f, 2.0f, config->DlssNrSkinStructure.value_or_default(), "%.2f", true);
+            bool mask = config->DlssNrPass3AutoMask.has_value() ? config->DlssNrPass3AutoMask.value() : config->DlssNrAutoMask.value_or_default();
+            if (ImGui::Checkbox("Auto skin mask", &mask))
+                config->DlssNrPass3AutoMask = mask;
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Reset##mask"))
+                config->DlssNrPass3AutoMask = std::optional<bool> {};
+            ImGui::TreePop();
+        }
 
-        static const char* nrStyleNames[] = { "Default (standard)", "Natural", "Cinematic" };
-        int style = (int) config->DlssNrStyle.value_or_default();
-
-        if (style > 2)
-            style = 2;
-
-        if (ImGui::Combo("Pass 1 style", &style, nrStyleNames, IM_ARRAYSIZE(nrStyleNames)))
-            config->DlssNrStyle = (uint32_t) style;
-
-        HelpMarker("The model's own processing profiles."
-                   "\n\nDefault (standard): the strongest. Boosts local contrast and deepens"
-                   "\nlighting, and can oversaturate or look stylised -- most of what reads as"
-                   "\n'the model changed my game's look' is this profile."
-                   "\n\nNatural: the same detail work with a gentler hand. Keeps skin tones and"
-                   "\ntonal balance closer to what the game rendered."
-                   "\n\nCinematic: tones down the shine and over-processing for a film-like look."
-                   "\n\nRead when the model is built, so a change rebuilds it after a moment. The"
-                   "\nnames come from community testing; NVIDIA ships no names in the binaries.");
-
-        ImGui::SeparatorText("Later-pass model profiles");
-        ImGui::TextDisabled("Auto inherits pass 1. Overrides rebuild only while that pass is active.");
-
-        static const char* inheritedPresetNames[] = {
-            "Auto (inherit pass 1)", "Default", "Preset 1", "Preset 2", "Preset 3"
-        };
-        static const char* inheritedStyleNames[] = {
-            "Auto (inherit pass 1)", "Default (standard)", "Natural", "Cinematic"
-        };
-
-        InheritedProfileCombo("Pass 2 preset", &config->DlssNrPass2Preset,
-                              inheritedPresetNames, IM_ARRAYSIZE(inheritedPresetNames));
-        InheritedProfileCombo("Pass 2 style", &config->DlssNrPass2Style,
-                              inheritedStyleNames, IM_ARRAYSIZE(inheritedStyleNames));
-        InheritedProfileCombo("Pass 3 preset", &config->DlssNrPass3Preset,
-                              inheritedPresetNames, IM_ARRAYSIZE(inheritedPresetNames));
-        InheritedProfileCombo("Pass 3 style", &config->DlssNrPass3Style,
-                              inheritedStyleNames, IM_ARRAYSIZE(inheritedStyleNames));
-
-        HelpMarker("These select different built-in profiles inside the same NVIDIA model DLL."
-                   "\nThey do not load a different model file per pass. Preset values are 0..3;"
-                   "\nstyles are 0 standard, 1 natural, and 2 cinematic. The names are based on"
-                   "\ncommunity testing because NVIDIA has not published this integration API.");
-
-        DeferredSlider("Intensity", &config->DlssNrIntensity, 0.0f, 2.0f, 1.0f);
-
-        HelpMarker("The model's own strength control, applied inside it. Distinct from detail"
-                       "\nstrength above, which scales the result afterwards.");
-
-        DeferredSlider("Local structure", &config->DlssNrLocalStructure, 0.0f, 2.0f, 1.0f);
-
-        DeferredSlider("Local tone", &config->DlssNrLocalTone, 0.0f, 2.0f, 1.0f);
-
-
-        DeferredSlider("Skin structure", &config->DlssNrSkinStructure, -1.0f, 2.0f, -1.0f);
-
-        HelpMarker("-1 means follow local structure, and is the model's own default -- it is not a"
-                       "\nstrength of zero. 0 and above set skin independently of the rest of the frame.");
-
-        bool autoMask = config->DlssNrAutoMask.value_or_default();
-        if (ImGui::Checkbox("Auto skin mask", &autoMask))
-            config->DlssNrAutoMask = autoMask;
-
-        HelpMarker("Lets the model find skin itself rather than treating the frame uniformly.");
+        if (ImGui::TreeNode("Advanced preset hints (effect unverified)"))
+        {
+            ImGui::TextWrapped("These hints are passed to NVIDIA at creation, but their visual effect is unverified. Use Style for model profile selection. Existing INI hints are preserved.");
+            static const char* presets[] = { "Default", "Preset 1", "Preset 2", "Preset 3" };
+            static const char* inheritedPresets[] = { "Auto (inherit pass 1)", "Default", "Preset 1", "Preset 2", "Preset 3" };
+            int preset = (int) std::min(config->DlssNrPreset.value_or_default(), 3u);
+            if (ImGui::Combo("Pass 1 preset hint", &preset, presets, IM_ARRAYSIZE(presets)))
+                config->DlssNrPreset = (uint32_t) preset;
+            InheritedProfileCombo("Pass 2 preset hint", &config->DlssNrPass2Preset, inheritedPresets, IM_ARRAYSIZE(inheritedPresets));
+            InheritedProfileCombo("Pass 3 preset hint", &config->DlssNrPass3Preset, inheritedPresets, IM_ARRAYSIZE(inheritedPresets));
+            ImGui::TreePop();
+        }
+        ImGui::TextWrapped("Per-pass overrides apply to the DX12 multipass path, including NR after RR. Native Vulkan and the driver-proxy backend remain single-pass.");
 
         ImGui::SeparatorText("Colour");
 

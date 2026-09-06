@@ -8,6 +8,9 @@ The upstream fork already provided experimental direct access to NVIDIA DLSS Neu
 - **Optional Neural Rendering before DLSS Super Resolution.** The model can process the DLSS input image—such as 1920x1080 in 4K Performance mode—before DLSS upscales it to the display resolution.
 - **Configurable multipass processing.** `[DlssNr] Passes=1..3` runs one, two, or three sequential neural evaluations. Each pass has independent persistent history; the final result is composed once against the original base image.
 - **Per-pass model profiles.** Passes 2 and 3 can inherit pass 1 or select their own built-in preset and style (`standard`, `natural`, or `cinematic`) without loading competing model DLLs.
+- **Independent model strengths per pass.** Each pass has intensity, local structure, local tone,
+  skin structure, and auto skin mask controls. Preset hints are grouped under a collapsed advanced
+  section because their visual effect is unverified; style is the primary profile selector.
 - **Guarded fallbacks.** Ray Reconstruction remains post-SR, and padded or offset dynamic-resolution inputs fall back to the existing post-SR path instead of using unsafe dimensions.
 - **Matching overlay and INI controls.** `RunBeforeSR` and `Passes` are exposed in both configuration and the OptiScaler overlay.
 - **Optional NR after native Ray Reconstruction (DX12).** Enable `ApplyAfterRR` separately;
@@ -17,6 +20,7 @@ The upstream fork already provided experimental direct access to NVIDIA DLSS Neu
 
 Downloads:
 
+- [Per-pass controls preview](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.5.0-pass-controls-preview) — reorganized pass sections and independent model strengths, including the RR controls. Runtime validation is pending.
 - [Native RR controls preview](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.4.0-rr-preview) — compiled experimental build with independent NR-after-RR controls. In-game RR/NR validation is pending.
 - [Portable cross-generation package](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.3.0-crossgen-portable) — the complete installer and backend layout, with game-neutral defaults and RTX 20/30/40/50 runtime guidance.
 - The earlier `general-per-pass-profiles-facc24f6` and `bg3-presr-multipass-e16d5866` packages are retained only as historical validation artifacts. They are incomplete for a clean installation and should not be redistributed.

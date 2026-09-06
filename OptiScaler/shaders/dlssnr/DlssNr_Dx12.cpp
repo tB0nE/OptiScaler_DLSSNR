@@ -164,6 +164,16 @@ using PFN_NrProbeFloat = void(__cdecl*) (void*, const char*, float, int);
 
 // One per back buffer, so an allocator is never reset while its frame is still in flight.
 
+struct NrPassTuning
+{
+    float intensity = 1.0f;
+    float structure = 1.0f;
+    float tone = 0.0f;
+    float skin = -1.0f;
+    bool autoMask = true;
+    bool operator==(const NrPassTuning&) const = default;
+};
+
 struct NrState
 {
     HMODULE forwarder = nullptr;
@@ -348,6 +358,7 @@ struct NrState
     // remaining strengths are intentionally shared by the stack.
     unsigned int builtPreset[DlssNr::MaxPassCount] = {};
     float builtIntensity = 0.0f;
+    NrPassTuning builtPassTuning[DlssNr::MaxPassCount] {};
     unsigned int builtStyle[DlssNr::MaxPassCount] = {};
     float builtLocalStructure = 0.0f;
     float builtLocalTone = 0.0f;
@@ -1336,15 +1347,51 @@ unsigned int PassStyle(const Config& cfg, unsigned int pass)
     return base;
 }
 
+NrPassTuning PassTuning(const Config& cfg, unsigned int pass)
+{
+    NrPassTuning result { cfg.DlssNrIntensity.value_or_default(),
+                          cfg.DlssNrLocalStructure.value_or_default(),
+                          pass == 0 ? cfg.DlssNrLocalTone.value_or_default() : 0.0f,
+                          cfg.DlssNrSkinStructure.value_or_default(),
+                          cfg.DlssNrAutoMask.value_or_default() };
+    if (pass == 1)
+    {
+        if (cfg.DlssNrPass2Intensity.has_value())
+            result.intensity = cfg.DlssNrPass2Intensity.value();
+        if (cfg.DlssNrPass2LocalStructure.has_value())
+            result.structure = cfg.DlssNrPass2LocalStructure.value();
+        if (cfg.DlssNrPass2LocalTone.has_value())
+            result.tone = cfg.DlssNrPass2LocalTone.value();
+        if (cfg.DlssNrPass2SkinStructure.has_value())
+            result.skin = cfg.DlssNrPass2SkinStructure.value();
+        if (cfg.DlssNrPass2AutoMask.has_value())
+            result.autoMask = cfg.DlssNrPass2AutoMask.value();
+    }
+    if (pass == 2)
+    {
+        if (cfg.DlssNrPass3Intensity.has_value())
+            result.intensity = cfg.DlssNrPass3Intensity.value();
+        if (cfg.DlssNrPass3LocalStructure.has_value())
+            result.structure = cfg.DlssNrPass3LocalStructure.value();
+        if (cfg.DlssNrPass3LocalTone.has_value())
+            result.tone = cfg.DlssNrPass3LocalTone.value();
+        if (cfg.DlssNrPass3SkinStructure.has_value())
+            result.skin = cfg.DlssNrPass3SkinStructure.value();
+        if (cfg.DlssNrPass3AutoMask.has_value())
+            result.autoMask = cfg.DlssNrPass3AutoMask.value();
+    }
+    const auto bounded = [](float value, float fallback, float minimum) {
+        return std::isfinite(value) ? std::clamp(value, minimum, 2.0f) : fallback;
+    };
+    result.intensity = bounded(result.intensity, 1.0f, 0.0f);
+    result.structure = bounded(result.structure, 1.0f, 0.0f);
+    result.tone = bounded(result.tone, pass == 0 ? 1.0f : 0.0f, 0.0f);
+    result.skin = bounded(result.skin, -1.0f, -1.0f);
+    return result;
+}
+
 bool TuningMatchesFeature(const Config& cfg, unsigned int requestedPasses)
 {
-    if (g_nr.builtIntensity != cfg.DlssNrIntensity.value_or_default() ||
-        g_nr.builtLocalStructure != cfg.DlssNrLocalStructure.value_or_default() ||
-        g_nr.builtLocalTone != cfg.DlssNrLocalTone.value_or_default() ||
-        g_nr.builtSkinStructure != cfg.DlssNrSkinStructure.value_or_default() ||
-        g_nr.builtAutoMask != cfg.DlssNrAutoMask.value_or_default())
-        return false;
-
     for (unsigned int pass = 0; pass < requestedPasses; ++pass)
     {
         // A profile cannot be stale until its feature exists. This lets a user prepare pass 2 or 3
@@ -1352,7 +1399,8 @@ bool TuningMatchesFeature(const Config& cfg, unsigned int requestedPasses)
         if (pass > 0 && g_nr.passFeature[pass] == nullptr)
             continue;
 
-        if (g_nr.builtPreset[pass] != PassPreset(cfg, pass) ||
+        if (g_nr.builtPassTuning[pass] != PassTuning(cfg, pass) ||
+            g_nr.builtPreset[pass] != PassPreset(cfg, pass) ||
             g_nr.builtStyle[pass] != PassStyle(cfg, pass))
             return false;
     }
@@ -1362,6 +1410,7 @@ bool TuningMatchesFeature(const Config& cfg, unsigned int requestedPasses)
 
 void RecordBuiltPrimaryTuning(const Config& cfg)
 {
+    g_nr.builtPassTuning[0] = PassTuning(cfg, 0);
     g_nr.builtPreset[0] = PassPreset(cfg, 0);
     g_nr.builtIntensity = cfg.DlssNrIntensity.value_or_default();
     g_nr.builtStyle[0] = PassStyle(cfg, 0);
@@ -1878,14 +1927,14 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         }
 
         SetExtras(cfg, nullptr, nullptr, 0, 0, 0, 0);
+        const auto tuning = PassTuning(cfg, 0);
         g_nr.feature =
             g_nr.create(snippet->wstring().c_str(), State::Instance().NVNGX_ApplicationDataPath.c_str(),
                         device, cmdList, g_nr.capabilityParams, workWidth, workHeight,
                         (int) PassPreset(cfg, 0),
-                        cfg.DlssNrIntensity.value_or_default(), (int) PassStyle(cfg, 0),
-                        cfg.DlssNrLocalStructure.value_or_default(), cfg.DlssNrLocalTone.value_or_default(),
-                        cfg.DlssNrSkinStructure.value_or_default(),
-                        cfg.DlssNrAutoMask.value_or_default() ? 1 : 0,
+                        tuning.intensity, (int) PassStyle(cfg, 0),
+                        tuning.structure, tuning.tone, tuning.skin,
+                        tuning.autoMask ? 1 : 0,
                         // UI correction at the model's own default: with no UI layer fed to it there
                         // is nothing for it to correct.
                         1);
@@ -2010,19 +2059,19 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             else
             {
                 SetExtras(cfg, nullptr, nullptr, 0, 0, 0, 0);
+                const auto tuning = PassTuning(cfg, pass);
                 g_nr.passFeature[pass] = g_nr.create(
                     snippet->wstring().c_str(), State::Instance().NVNGX_ApplicationDataPath.c_str(),
                     device, cmdList, g_nr.capabilityParams, workWidth, workHeight,
-                    (int) PassPreset(cfg, pass), cfg.DlssNrIntensity.value_or_default(),
+                    (int) PassPreset(cfg, pass), tuning.intensity,
                     (int) PassStyle(cfg, pass),
-                    cfg.DlssNrLocalStructure.value_or_default(),
-                    // Local tone belongs to the frame and is applied by pass zero only.
-                    0.0f, cfg.DlssNrSkinStructure.value_or_default(),
-                    cfg.DlssNrAutoMask.value_or_default() ? 1 : 0, 1);
+                    tuning.structure, tuning.tone, tuning.skin,
+                    tuning.autoMask ? 1 : 0, 1);
 
                 if (g_nr.passFeature[pass] != nullptr)
                 {
                     g_nr.builtPreset[pass] = PassPreset(cfg, pass);
+                    g_nr.builtPassTuning[pass] = tuning;
                     g_nr.builtStyle[pass] = PassStyle(cfg, pass);
                     g_nr.passNeedsReset[pass] = true;
                     g_nr.passPendingSubmission[pass] = true;
@@ -2489,16 +2538,16 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     {
         void* const passFeature = pass == 0 ? g_nr.feature : g_nr.passFeature[pass];
         const bool passReset = g_nr.reset || (pass > 0 && g_nr.passNeedsReset[pass]);
-        const float passTone = pass == 0 ? cfg.DlssNrLocalTone.value_or_default() : 0.0f;
+        const auto tuning = PassTuning(cfg, pass);
 
         MakeModelWritable(passOutput);
         result = g_nr.evaluate(
             cmdList, passFeature, g_nr.capabilityParams, passInput, depthIn, motionIn, passOutput,
             workWidth, workHeight, guideWidth, guideHeight, g_nr.guideDepthInverted ? 1 : 0,
-            passReset ? 1 : 0, cfg.DlssNrIntensity.value_or_default(),
-            (int) PassStyle(cfg, pass), cfg.DlssNrLocalStructure.value_or_default(),
-            passTone, cfg.DlssNrSkinStructure.value_or_default(),
-            cfg.DlssNrAutoMask.value_or_default() ? 1 : 0, g_nr.guideMvScaleX * mvToWork,
+            passReset ? 1 : 0, tuning.intensity,
+            (int) PassStyle(cfg, pass), tuning.structure,
+            tuning.tone, tuning.skin,
+            tuning.autoMask ? 1 : 0, g_nr.guideMvScaleX * mvToWork,
             g_nr.guideMvScaleY * mvToWork);
 
         if (result != NVSDK_NGX_Result_Success)

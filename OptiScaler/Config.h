@@ -282,6 +282,16 @@ class Config
     // -1 means follow local structure, which is the model's own default. It is not a strength of zero.
     CustomOptional<float> DlssNrSkinStructure { -1.0f };
     CustomOptional<bool> DlssNrAutoMask { true };
+    CustomOptional<float, NoDefault> DlssNrPass2Intensity;
+    CustomOptional<float, NoDefault> DlssNrPass2LocalStructure;
+    CustomOptional<float, NoDefault> DlssNrPass2LocalTone;
+    CustomOptional<float, NoDefault> DlssNrPass2SkinStructure;
+    CustomOptional<bool, NoDefault> DlssNrPass2AutoMask;
+    CustomOptional<float, NoDefault> DlssNrPass3Intensity;
+    CustomOptional<float, NoDefault> DlssNrPass3LocalStructure;
+    CustomOptional<float, NoDefault> DlssNrPass3LocalTone;
+    CustomOptional<float, NoDefault> DlssNrPass3SkinStructure;
+    CustomOptional<bool, NoDefault> DlssNrPass3AutoMask;
 
     // How much of the model's edit reaches the frame. Separated because detail synthesis is a luminance
     // edit and any colour shift is usually the part you do not want, and allowed past 1.0 because

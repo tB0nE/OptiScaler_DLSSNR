@@ -83,6 +83,25 @@ OptiScaler into pass-through mode, which means no menu and no Neural Rendering.
 Do not install the RenoDX DLSS add-on merely to obtain its compatibility runtime. This OptiScaler
 fork drives `nvngx_dlssnr.dll` itself, and two Neural Rendering injectors can conflict.
 
+## Individual pass controls
+
+Under **DLSS Neural Rendering → Model passes**, expand Pass 1, Pass 2, or Pass 3. Each contains
+Style, Intensity, Local structure, Local tone, Skin structure, and Auto skin mask. Sliders commit
+when released to avoid rebuilding the model on every movement. Set the model pass count to 2 or 3
+to activate later passes; editing inactive passes prepares their settings without running them.
+
+Later passes inherit pass 1 unless overridden, except Local tone, which defaults to 0 to preserve
+the earlier build's appearance. Reset on a later-pass slider clears its override. Intensity,
+local structure, and local tone range from 0 to 2; skin structure ranges from -1 to 2, with -1
+following local structure. The corresponding INI keys are `Pass2Intensity`, `Pass2LocalStructure`,
+`Pass2LocalTone`, `Pass2SkinStructure`, and `Pass2AutoMask`, with matching `Pass3...` keys.
+Use `auto` for the default behavior. Styles retain `Pass2Style` / `Pass3Style`.
+
+These controls apply to D3D12 multipass and its bridges, both before/after SR and after native RR.
+Native Vulkan and the driver-proxy backend remain single-pass. Preset hints are still transmitted
+at model creation, but a changed hint is not proof of a changed model. They are preserved under
+**Advanced preset hints (effect unverified)** and in the INI for compatibility.
+
 ## Neural Rendering with native Ray Reconstruction
 
 In a game that already supports RR, enable RR in the game's settings and enable
