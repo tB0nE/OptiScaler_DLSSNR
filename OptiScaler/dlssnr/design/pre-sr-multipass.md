@@ -50,9 +50,13 @@ copies back instead of binding an illegal UAV.
 - Pass count is clamped to `1..3`; historical testing found later layers converged while cost and
   artifacts continued to grow.
 - The driver-proxy backend remains single-pass and logs the effective fallback.
-- A padded, offset, or max-sized dynamic-resolution Color allocation falls back to post-SR until the
-  colour codec supports subrect origins; this avoids processing stale pixels or reporting a false model
-  resolution.
+- Origin-zero padded or max-sized Color allocations are copied to an active-sized UAV texture before
+  encode/model/resolve, then only the edited active rectangle is copied back. The game's padding and
+  resource state are preserved. The compact texture shares the scratch set's deferred retirement;
+  changes in active resolution rebuild NR features/history as usual. No shader or guide-coordinate
+  resampling is introduced by the crop. The extra copies are inside NR's GPU timing interval.
+- Non-zero colour offsets, partial/out-of-bounds active sizes and unsupported texture layouts still
+  fall back post-SR. Both absent active-size values retain the resource-size interpretation.
 - Placement is part of the rebuild key even when pre/post surfaces happen to share dimensions and
   format (for example DLAA).
 - Working scales from 25% through 200% remain supported; the ping-pong resources use model-work size.

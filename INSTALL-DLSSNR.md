@@ -102,6 +102,15 @@ Native Vulkan and the driver-proxy backend remain single-pass. Preset hints are 
 at model creation, but a changed hint is not proof of a changed model. They are preserved under
 **Advanced preset hints (effect unverified)** and in the INI for compatibility.
 
+## Padded DLSS input sizes
+
+With a build containing the padded pre-SR fix and `RunBeforeSR=true`, an origin-zero 2558x1439 image
+inside a 2560x1440 colour texture runs NR at 2558x1439 when `WorkingScale=1`. The padding is not
+processed or overwritten. This does not change the game's DLSS preset ratios. Non-zero colour
+offsets and invalid rectangles still fall back after SR. The older release downloads do not gain
+this fix through an INI change; the loaded OptiScaler proxy DLL must be updated.
+See [validation and reporting instructions](docs/PADDED-PRESR.md).
+
 ## Neural Rendering with native Ray Reconstruction
 
 In a game that already supports RR, enable RR in the game's settings and enable

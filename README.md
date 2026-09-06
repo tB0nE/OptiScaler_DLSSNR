@@ -11,7 +11,9 @@ The upstream fork already provided experimental direct access to NVIDIA DLSS Neu
 - **Independent model strengths per pass.** Each pass has intensity, local structure, local tone,
   skin structure, and auto skin mask controls. Preset hints are grouped under a collapsed advanced
   section because their visual effect is unverified; style is the primary profile selector.
-- **Guarded fallbacks.** Ray Reconstruction remains post-SR, and padded or offset dynamic-resolution inputs fall back to the existing post-SR path instead of using unsafe dimensions.
+- **Padded pre-SR inputs.** Origin-zero active images inside larger colour textures run NR at the
+  active resolution. Ray Reconstruction, non-zero colour offsets and invalid rectangles retain the
+  post-SR fallback. This is not restricted to standard 1080p/1440p/4K sizes.
 - **Matching overlay and INI controls.** `RunBeforeSR` and `Passes` are exposed in both configuration and the OptiScaler overlay.
 - **Optional NR after native Ray Reconstruction (DX12).** Enable `ApplyAfterRR` separately;
   `RRPasses` defaults to 1 and `RRWorkingScale` to 0.5 of RR's output dimensions. RR keeps its
@@ -58,6 +60,8 @@ release. This supplies dependencies, not a guarantee of injected FG compatibilit
 
 ### New compatibility work (not yet game-validated)
 
+- Padded pre-SR colour inputs, including the reported 2558x1439-in-2560x1440 case, no longer fall
+  back to 4K NR merely because the allocation is larger. [Details and testing](docs/PADDED-PRESR.md).
 - Optional skin-colour protection with separate skin/environment lighting and colour controls.
   This is a colour-based filter, not a face detector. The model's AutoMask remains a separate control.
 - An **External frame generation / MFG unlocker** mode that leaves Streamline and Reflex to the game
@@ -113,7 +117,7 @@ Implementation details and safety invariants are documented in [the pre-SR multi
 
 The implementation contains no BG3-specific executable names, offsets, or shaders. It is designed for 64-bit games whose DLSS Super Resolution call reaches OptiScaler's Direct3D 12 path, including its Direct3D 11/Vulkan-to-DX12 bridges. It has also run in Hogwarts Legacy and Cyberpunk 2077. Compatibility still depends on the game exposing valid colour, depth, motion-vector, resolution, and command-submission data through its upscaler integration.
 
-Ray Reconstruction deliberately uses the post-SR path. Native Vulkan currently retains the upstream post-SR implementation. Games with unusual loaders, multiple swapchains, offset/padded dynamic-resolution textures, anti-cheat, or another `dxgi.dll` mod may need a different OptiScaler proxy name or will use the guarded post-SR fallback.
+Ray Reconstruction deliberately uses the post-SR path. Native Vulkan currently retains the upstream post-SR implementation. Games with unusual loaders, multiple swapchains, non-zero colour offsets, invalid render rectangles, anti-cheat, or another `dxgi.dll` mod may need a different OptiScaler proxy name or will use the guarded post-SR fallback. Origin-zero allocation padding is supported on the DX12 pre-SR path and its bridges.
 
 ---
 

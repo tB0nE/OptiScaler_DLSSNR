@@ -133,8 +133,8 @@ void RenderMenu(Config* config, float menuResScale)
         HelpMarker("Runs Neural Rendering on the render-resolution colour input immediately before"
                    "\nSuper Resolution, so SR temporally accumulates and upscales the enhanced frame."
                    "\n\nRay Reconstruction is deliberately excluded: its input contract differs and"
-                   "\nuses the separate Apply after Ray Reconstruction option. Padded or offset"
-                   "\ndynamic-resolution inputs also fall back post-upscale for safety."
+                   "\nuses the separate Apply after Ray Reconstruction option. Origin-zero padded"
+                   "\ninputs use their active render size; offset or invalid inputs fall back post-SR."
                    "\n\nThis placement control currently applies to the Direct3D 12 path and its"
                    "\nDirect3D 11/Vulkan bridges; native Vulkan keeps the post-upscale path.");
 
