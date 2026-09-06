@@ -130,6 +130,13 @@ Keep the game's genuine `nvngx_dlssd.dll` (RR) separate from `nvngx_dlssnr.dll` 
 For an RR-only comparison, disable the master NR switch; “Apply the model” merely hides the edit
 and still incurs NR's GPU cost. Successful RR initialization alone does not prove image quality.
 
+## Optional DLSS Frame Generation
+
+For the six NVIDIA Streamline/FG dependencies, the pinned download command, and separate instructions
+for native/external FG versus OptiScaler's own FG, see [DLSS-FRAME-GENERATION.md](docs/DLSS-FRAME-GENERATION.md).
+Do not copy another game's Streamline folder or assume NR working proves FG compatibility.
+The optional component does not include the NR model or enable FG automatically.
+
 ## Diagnose a missing menu
 
 Set:

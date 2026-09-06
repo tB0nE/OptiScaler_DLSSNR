@@ -27,6 +27,18 @@ Downloads:
 
 NVIDIA's proprietary `nvngx_dlssnr.dll` is required but is **not redistributed** here.
 
+### Optional DLSS Frame Generation dependencies
+
+The repo now includes a [pinned NVIDIA Streamline/FG downloader and packaging option](docs/DLSS-FRAME-GENERATION.md).
+It verifies the official SDK ZIP, all six production DLL hashes and NVIDIA signatures, and keeps
+the files in `OptiScaler/streamline`. Nothing is enabled automatically and existing different
+Streamline files are not overwritten. These additions are not in the older downloads above.
+
+Normal packages include the downloader; `package_release.ps1 -IncludeDlssFrameGeneration
+-AcceptNvidiaLicenses` creates an optional full local package with the DLLs included. NVIDIA's
+proprietary DLLs are not committed to Git. Read the linked licence and publishing notes first.
+This supplies dependencies, not a guarantee that injected FG works in every game or an RTX 40 MFG unlock.
+
 ### New compatibility work (not yet game-validated)
 
 - Optional skin-colour protection with separate skin/environment lighting and colour controls.

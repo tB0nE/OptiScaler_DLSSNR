@@ -9,8 +9,12 @@
 # and the user supplies their own copy per game folder. Only the ~108 KB forwarder ships.
 
 param(
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
     [string]$Version = "v0.1.0-dlssnr",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$IncludeDlssFrameGeneration,
+    [switch]$AcceptNvidiaLicenses,
+    [string]$StreamlineArchive
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,8 +23,15 @@ $ErrorActionPreference = "Stop"
 # than one now -- the experiment runs in a git worktree beside the main tree, and a hardcoded root
 # silently packages the other one's build output while reporting success.
 $root = Split-Path -Parent $PSCommandPath
-$stage = "$root\release\$Version"
-$zip = "$root\release\OptiScaler-DLSSNR-$Version.zip"
+$flavour = if ($IncludeDlssFrameGeneration) { '-with-dlss-fg' } else { '' }
+$stage = "$root\release\$Version$flavour"
+$zip = "$root\release\OptiScaler-DLSSNR-$Version$flavour.zip"
+if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $zip)) {
+    throw 'Release output already exists. Choose a new -Version; existing packages are never deleted or overwritten.'
+}
+if ($IncludeDlssFrameGeneration -and -not $AcceptNvidiaLicenses) {
+    throw 'Bundling NVIDIA binaries requires -AcceptNvidiaLicenses. Read docs/DLSS-FRAME-GENERATION.md first.'
+}
 
 if (-not $SkipBuild) {
     $msb = (Get-Command MSBuild.exe -ErrorAction SilentlyContinue).Source
@@ -68,7 +79,6 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 
-if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
 # Files, then folders. Anything not named here does not ship. Runtime files and user-facing
@@ -83,6 +93,7 @@ $sourceFiles = @(
     "OptiScaler.ini",
     "setup_windows.bat",
     "setup_linux.sh",
+    "get_streamline.ps1",
     "README.md",
     "INSTALL-DLSSNR.md",
     "LICENSE"
@@ -114,6 +125,18 @@ foreach ($d in @("Licenses", "OptiScaler")) {
 
 Copy-Item $forwarder "$stage\nvngx.dll_dlssnr.dll" -Force
 Copy-Item -LiteralPath "$root\docs" -Destination "$stage\docs" -Recurse -Force
+New-Item -ItemType Directory -Path "$stage\redist\streamline" -Force | Out-Null
+Copy-Item -LiteralPath "$root\redist\streamline\manifest.json" -Destination "$stage\redist\streamline\manifest.json"
+
+# An old test stack in the build directory must not silently enter a normal release. The optional
+# full application package gets only the pinned official production files, with their own licences.
+if (Test-Path -LiteralPath "$stage\OptiScaler\streamline") {
+    throw 'REFUSING: the build output contains an unmanaged Streamline stack. Move it aside and use -IncludeDlssFrameGeneration.'
+}
+if ($IncludeDlssFrameGeneration) {
+    & "$root\get_streamline.ps1" -Destination "$stage\OptiScaler\streamline" `
+        -ArchivePath $StreamlineArchive -AcceptNvidiaLicenses
+}
 
 # Logging on, in the release only.
 #
@@ -186,7 +209,6 @@ $checksumLines = Get-ChildItem -LiteralPath $stage -Recurse -File |
 [IO.File]::WriteAllLines("$stage\SHA256SUMS.txt", $checksumLines, [Text.UTF8Encoding]::new($false))
 Write-Host "checksums: $($checksumLines.Count) files"
 
-if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path "$stage\*" -DestinationPath $zip -CompressionLevel Optimal
 
 Write-Host ""

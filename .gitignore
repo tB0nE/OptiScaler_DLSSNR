@@ -441,3 +441,7 @@ CyberFSR/imgui.ini
 /OptiScaler/misc/Telemetry.cpp
 /OptiScaler/misc/Telemetry.h
 release
+
+# Official NVIDIA SDK download/extraction cache; provenance is in redist/streamline/manifest.json.
+/.dependencies/
+/OptiScaler/streamline/
