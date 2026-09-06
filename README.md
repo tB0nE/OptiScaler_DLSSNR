@@ -10,14 +10,53 @@ The upstream fork already provided experimental direct access to NVIDIA DLSS Neu
 - **Per-pass model profiles.** Passes 2 and 3 can inherit pass 1 or select their own built-in preset and style (`standard`, `natural`, or `cinematic`) without loading competing model DLLs.
 - **Guarded fallbacks.** Ray Reconstruction remains post-SR, and padded or offset dynamic-resolution inputs fall back to the existing post-SR path instead of using unsafe dimensions.
 - **Matching overlay and INI controls.** `RunBeforeSR` and `Passes` are exposed in both configuration and the OptiScaler overlay.
-- **Verified BG3 path.** Baldur's Gate 3 was tested with two neural passes at 1920x1080 followed by DLSS Super Resolution to 3840x2160.
+- **Verified BG3 path.** Baldur's Gate 3 was tested through the `bg3_dx11.exe` D3D11-to-D3D12 bridge with two neural passes at 1920x1080 followed by DLSS Super Resolution to 3840x2160.
 
 Downloads:
 
-- [General experimental package with per-pass profiles](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/general-per-pass-profiles-facc24f6) — game-neutral defaults; build-tested, published as a prerelease while broader runtime reports come in.
-- [Exact original BG3-tested package](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/bg3-presr-multipass-e16d5866) — the earlier build used for the 1920x1080 to 3840x2160 validation.
+- [Portable cross-generation package](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.3.0-crossgen-portable) — the complete installer and backend layout, with game-neutral defaults and RTX 20/30/40/50 runtime guidance.
+- The earlier `general-per-pass-profiles-facc24f6` and `bg3-presr-multipass-e16d5866` packages are retained only as historical validation artifacts. They are incomplete for a clean installation and should not be redistributed.
 
 NVIDIA's proprietary `nvngx_dlssnr.dll` is required but is **not redistributed** here.
+
+### GPU and runtime compatibility
+
+The Neural Rendering network can run on RTX 20, 30, 40, and 50-series GPUs, but not with the same
+runtime binary on every architecture:
+
+| GPU | Required `nvngx_dlssnr.dll` 310.8 runtime | SHA-256 |
+|---|---|---|
+| RTX 50 | Original NVIDIA-signed runtime | `E16BCF15E16E13F527491CDF7845B2FE6521A738D8F7C9C721866A8496E1FC8E` |
+| RTX 20 / 30 / 40 | ShortFuse cross-generation compatibility runtime from the pinned RenoDX thread | `E67DEE209320CDAFE0E93E45675D7AA34323A53ACC57A72B2E40A181581C989A` |
+
+The compatibility runtime preserves the model but replaces or backports GPU programs that the older
+architectures cannot execute: the RTX 20/30 path is predominantly FP16, while the RTX 40 path
+backports Blackwell-only operations. It is a modified NVIDIA-derived binary, so its original NVIDIA
+Authenticode signature no longer validates. Obtain it only from
+[ShortFuse's pinned RenoDX thread](https://discord.com/channels/1408098019194310818/1543976771920330884)
+and verify the hash above. Do not use random DLL mirrors. Driver 616.56 or newer is required.
+
+### Quick install
+
+1. Close the game, then back up any existing OptiScaler/ReShade proxy DLL and INI files.
+2. Extract the **entire** release archive beside the game's real 64-bit executable. Keep the
+   `OptiScaler` and `Licenses` directories with the DLLs; copying `OptiScaler.dll` alone will not work.
+3. Add the GPU-appropriate `nvngx_dlssnr.dll` from the table above to that same directory and verify
+   its SHA-256. Both it and this package's differently named `nvngx.dll_dlssnr.dll` must be present.
+4. Run `setup_windows.bat` from that directory. Choose `dxgi.dll` first unless the game or another
+   loader already uses that name, and answer **NVIDIA** when prompted. The script renames
+   `OptiScaler.dll` to the selected loadable proxy and confirms which Neural Rendering runtime it found.
+5. Leave `[ProcessFilter] TargetProcessName=auto` for a portable installation. Start the game, enter a
+   rendered scene, press `Insert`, and enable **DLSS Neural Rendering**. Start with one pass.
+6. For pre-upscale operation, set `RunBeforeSR=true` and select DLSS in the game. At 3840x2160 output,
+   DLSS Performance supplies a 1920x1080 input to the model before Super Resolution.
+
+If no menu or `OptiScaler.log` appears, the proxy did not load: re-check the executable directory,
+proxy filename, antivirus quarantine, and conflicts with an existing loader. Do not copy an INI whose
+`TargetProcessName` names a different game; that deliberately activates pass-through mode.
+
+Read [INSTALL-DLSSNR.md](INSTALL-DLSSNR.md) for the full instructions, per-game paths, loader notes,
+configuration example, and diagnostics.
 
 Implementation details and safety invariants are documented in [the pre-SR multipass design note](OptiScaler/dlssnr/design/pre-sr-multipass.md). The remainder of this README is the upstream OptiScaler documentation.
 
