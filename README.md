@@ -29,15 +29,32 @@ NVIDIA's proprietary `nvngx_dlssnr.dll` is required but is **not redistributed**
 
 ### Optional DLSS Frame Generation dependencies
 
-The repo now includes a [pinned NVIDIA Streamline/FG downloader and packaging option](docs/DLSS-FRAME-GENERATION.md).
-It verifies the official SDK ZIP, all six production DLL hashes and NVIDIA signatures, and keeps
-the files in `OptiScaler/streamline`. Nothing is enabled automatically and existing different
-Streamline files are not overwritten. These additions are not in the older downloads above.
+**The NVIDIA Streamline/FG DLLs are not hosted in this repo or uploaded with this change.**
+The DLSS runtime has separate redistribution conditions; the Streamline source licence does not
+cover the whole DLL set. See the [licence review and official sources](docs/DLSS-FRAME-GENERATION.md#licences-and-distribution).
 
-Normal packages include the downloader; `package_release.ps1 -IncludeDlssFrameGeneration
--AcceptNvidiaLicenses` creates an optional full local package with the DLLs included. NVIDIA's
-proprietary DLLs are not committed to Git. Read the linked licence and publishing notes first.
-This supplies dependencies, not a guarantee that injected FG works in every game or an RTX 40 MFG unlock.
+Get the files from NVIDIA's [Streamline 2.12.0 release](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.12.0)
+([official SDK ZIP](https://github.com/NVIDIA-RTX/Streamline/releases/download/v2.12.0/streamline-sdk-v2.12.0.zip)).
+Our helper downloads that exact ZIP and verifies its checksum, all six DLL hashes and NVIDIA signatures.
+
+1. Install a complete OptiScaler release first. The older downloads above do not contain this helper.
+2. Download this repo's [source ZIP](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/archive/refs/heads/main.zip)
+   and extract it into a **separate working folder**, not over the game. Open PowerShell in the
+   extracted folder containing `get_streamline.ps1` and `redist`.
+3. Close the game, back up its OptiScaler setup, read the linked NVIDIA licences, then run the
+   following command with your game's real executable directory in place of the example:
+
+   ```powershell
+   .\get_streamline.ps1 -Destination 'D:\Path\To\Game\OptiScaler\streamline' -AcceptNvidiaLicenses
+   ```
+
+4. Follow the [FG setup instructions](docs/DLSS-FRAME-GENERATION.md#choose-one-fg-owner).
+   Downloading the DLLs does **not** enable FG or unlock RTX 40 MFG. Existing different DLLs are
+   never overwritten. Do not replace a game's working native Streamline stack.
+
+Prefer manual installation? The [manual download instructions](docs/DLSS-FRAME-GENERATION.md#manual-download-without-the-helper)
+list the exact production files and their destination. The source ZIP is not a compiled OptiScaler
+release. This supplies dependencies, not a guarantee of injected FG compatibility in every game.
 
 ### New compatibility work (not yet game-validated)
 

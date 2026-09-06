@@ -32,6 +32,9 @@ if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $zip)) {
 if ($IncludeDlssFrameGeneration -and -not $AcceptNvidiaLicenses) {
     throw 'Bundling NVIDIA binaries requires -AcceptNvidiaLicenses. Read docs/DLSS-FRAME-GENERATION.md first.'
 }
+if ($IncludeDlssFrameGeneration) {
+    Write-Warning 'LOCAL USE ONLY: this DLL-containing package has not been cleared for redistribution. Publish the downloader-only variant instead; see docs/DLSS-FRAME-GENERATION.md.'
+}
 
 if (-not $SkipBuild) {
     $msb = (Get-Command MSBuild.exe -ErrorAction SilentlyContinue).Source
