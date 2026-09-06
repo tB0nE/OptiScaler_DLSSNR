@@ -80,6 +80,27 @@ static bool DeferredSlider(const char* label, CustomOptional<float>* opt, float 
     return changed;
 }
 
+// An absent later-pass setting inherits pass 1. The first combo item represents that absence; the
+// remaining items map directly to the model's zero-based profile values.
+static bool InheritedProfileCombo(const char* label, CustomOptional<uint32_t, NoDefault>* opt,
+                                  const char* const* names, int nameCount)
+{
+    int selected = 0;
+
+    if (opt->has_value())
+        selected = std::clamp((int) opt->value(), 0, nameCount - 2) + 1;
+
+    if (!ImGui::Combo(label, &selected, names, nameCount))
+        return false;
+
+    if (selected == 0)
+        *opt = std::optional<uint32_t> {};
+    else
+        *opt = (uint32_t) (selected - 1);
+
+    return true;
+}
+
 void RenderMenu(Config* config, float menuResScale)
 {
 
@@ -386,7 +407,7 @@ void RenderMenu(Config* config, float menuResScale)
 
         static const char* nrPresetNames[] = { "Default", "Preset 1", "Preset 2", "Preset 3" };
         int preset = (int) config->DlssNrPreset.value_or_default();
-        if (ImGui::Combo("Model preset", &preset, nrPresetNames, IM_ARRAYSIZE(nrPresetNames)))
+        if (ImGui::Combo("Pass 1 model preset", &preset, nrPresetNames, IM_ARRAYSIZE(nrPresetNames)))
             config->DlssNrPreset = (uint32_t) preset;
 
         HelpMarker("Default leaves the choice to the model."
@@ -399,7 +420,7 @@ void RenderMenu(Config* config, float menuResScale)
         if (style > 2)
             style = 2;
 
-        if (ImGui::Combo("Style", &style, nrStyleNames, IM_ARRAYSIZE(nrStyleNames)))
+        if (ImGui::Combo("Pass 1 style", &style, nrStyleNames, IM_ARRAYSIZE(nrStyleNames)))
             config->DlssNrStyle = (uint32_t) style;
 
         HelpMarker("The model's own processing profiles."
@@ -411,6 +432,30 @@ void RenderMenu(Config* config, float menuResScale)
                    "\n\nCinematic: tones down the shine and over-processing for a film-like look."
                    "\n\nRead when the model is built, so a change rebuilds it after a moment. The"
                    "\nnames come from community testing; NVIDIA ships no names in the binaries.");
+
+        ImGui::SeparatorText("Later-pass model profiles");
+        ImGui::TextDisabled("Auto inherits pass 1. Overrides rebuild only while that pass is active.");
+
+        static const char* inheritedPresetNames[] = {
+            "Auto (inherit pass 1)", "Default", "Preset 1", "Preset 2", "Preset 3"
+        };
+        static const char* inheritedStyleNames[] = {
+            "Auto (inherit pass 1)", "Default (standard)", "Natural", "Cinematic"
+        };
+
+        InheritedProfileCombo("Pass 2 preset", &config->DlssNrPass2Preset,
+                              inheritedPresetNames, IM_ARRAYSIZE(inheritedPresetNames));
+        InheritedProfileCombo("Pass 2 style", &config->DlssNrPass2Style,
+                              inheritedStyleNames, IM_ARRAYSIZE(inheritedStyleNames));
+        InheritedProfileCombo("Pass 3 preset", &config->DlssNrPass3Preset,
+                              inheritedPresetNames, IM_ARRAYSIZE(inheritedPresetNames));
+        InheritedProfileCombo("Pass 3 style", &config->DlssNrPass3Style,
+                              inheritedStyleNames, IM_ARRAYSIZE(inheritedStyleNames));
+
+        HelpMarker("These select different built-in profiles inside the same NVIDIA model DLL."
+                   "\nThey do not load a different model file per pass. Preset values are 0..3;"
+                   "\nstyles are 0 standard, 1 natural, and 2 cinematic. The names are based on"
+                   "\ncommunity testing because NVIDIA has not published this integration API.");
 
         DeferredSlider("Intensity", &config->DlssNrIntensity, 0.0f, 2.0f, 1.0f);
 

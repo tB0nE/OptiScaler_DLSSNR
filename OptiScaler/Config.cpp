@@ -362,6 +362,10 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrPreset.set_from_config(readUInt("DlssNr", "Preset"));
             DlssNrIntensity.set_from_config(readFloat("DlssNr", "Intensity"));
             DlssNrStyle.set_from_config(readUInt("DlssNr", "Style"));
+            DlssNrPass2Preset.set_from_config(readUInt("DlssNr", "Pass2Preset"));
+            DlssNrPass2Style.set_from_config(readUInt("DlssNr", "Pass2Style"));
+            DlssNrPass3Preset.set_from_config(readUInt("DlssNr", "Pass3Preset"));
+            DlssNrPass3Style.set_from_config(readUInt("DlssNr", "Pass3Style"));
             DlssNrLocalStructure.set_from_config(readFloat("DlssNr", "LocalStructure"));
             DlssNrLocalTone.set_from_config(readFloat("DlssNr", "LocalTone"));
             DlssNrSkinStructure.set_from_config(readFloat("DlssNr", "SkinStructure"));
@@ -1253,6 +1257,14 @@ bool Config::SaveIni()
     ini.SetValue("DlssNr", "Preset", GetIntValue(Instance()->DlssNrPreset.value_for_config()).c_str());
     ini.SetValue("DlssNr", "Intensity", GetFloatValue(Instance()->DlssNrIntensity.value_for_config()).c_str());
     ini.SetValue("DlssNr", "Style", GetIntValue(Instance()->DlssNrStyle.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "Pass2Preset",
+                 GetIntValue(Instance()->DlssNrPass2Preset.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "Pass2Style",
+                 GetIntValue(Instance()->DlssNrPass2Style.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "Pass3Preset",
+                 GetIntValue(Instance()->DlssNrPass3Preset.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "Pass3Style",
+                 GetIntValue(Instance()->DlssNrPass3Style.value_for_config()).c_str());
     ini.SetValue("DlssNr", "LocalStructure",
                  GetFloatValue(Instance()->DlssNrLocalStructure.value_for_config()).c_str());
     ini.SetValue("DlssNr", "LocalTone", GetFloatValue(Instance()->DlssNrLocalTone.value_for_config()).c_str());

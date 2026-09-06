@@ -267,6 +267,13 @@ class Config
     CustomOptional<float> DlssNrIntensity { 1.0f };
     // 0 default (standard), 1 natural, 2 cinematic -- the model's own processing profiles.
     CustomOptional<uint32_t> DlssNrStyle { 0 };
+    // Optional per-pass model profiles. Pass 1 uses Preset/Style above; an absent override inherits
+    // pass 1. Keeping inheritance explicit preserves every existing configuration and lets changing
+    // the base profile update the whole stack unless a later pass was deliberately specialised.
+    CustomOptional<uint32_t, NoDefault> DlssNrPass2Preset;
+    CustomOptional<uint32_t, NoDefault> DlssNrPass2Style;
+    CustomOptional<uint32_t, NoDefault> DlssNrPass3Preset;
+    CustomOptional<uint32_t, NoDefault> DlssNrPass3Style;
     CustomOptional<float> DlssNrLocalStructure { 1.0f };
     CustomOptional<float> DlssNrLocalTone { 1.0f };
     // -1 means follow local structure, which is the model's own default. It is not a strength of zero.

@@ -343,10 +343,11 @@ struct NrState
     float guideMvScaleX = 1.0f;
     float guideMvScaleY = 1.0f;
 
-    // The values the live feature was created with, and when a difference from them was first seen.
-    unsigned int builtPreset = 0;
+    // The values each live feature was created with. Preset and style may differ per layer; the
+    // remaining strengths are intentionally shared by the stack.
+    unsigned int builtPreset[DlssNr::MaxPassCount] = {};
     float builtIntensity = 0.0f;
-    unsigned int builtStyle = 0;
+    unsigned int builtStyle[DlssNr::MaxPassCount] = {};
     float builtLocalStructure = 0.0f;
     float builtLocalTone = 0.0f;
     float builtSkinStructure = 0.0f;
@@ -1308,22 +1309,61 @@ void SetExtras(const Config& cfg, ID3D12Resource* ui, ID3D12Resource* backbuffer
                    uiWidth, uiHeight, bbWidth, bbHeight);
 }
 
-bool TuningMatchesFeature(const Config& cfg)
+unsigned int PassPreset(const Config& cfg, unsigned int pass)
 {
-    return g_nr.builtPreset == cfg.DlssNrPreset.value_or_default() &&
-           g_nr.builtIntensity == cfg.DlssNrIntensity.value_or_default() &&
-           g_nr.builtStyle == cfg.DlssNrStyle.value_or_default() &&
-           g_nr.builtLocalStructure == cfg.DlssNrLocalStructure.value_or_default() &&
-           g_nr.builtLocalTone == cfg.DlssNrLocalTone.value_or_default() &&
-           g_nr.builtSkinStructure == cfg.DlssNrSkinStructure.value_or_default() &&
-           g_nr.builtAutoMask == cfg.DlssNrAutoMask.value_or_default();
+    const unsigned int base = std::min(cfg.DlssNrPreset.value_or_default(), 3u);
+
+    if (pass == 1 && cfg.DlssNrPass2Preset.has_value())
+        return std::min(cfg.DlssNrPass2Preset.value(), 3u);
+
+    if (pass == 2 && cfg.DlssNrPass3Preset.has_value())
+        return std::min(cfg.DlssNrPass3Preset.value(), 3u);
+
+    return base;
 }
 
-void RecordBuiltTuning(const Config& cfg)
+unsigned int PassStyle(const Config& cfg, unsigned int pass)
 {
-    g_nr.builtPreset = cfg.DlssNrPreset.value_or_default();
+    const unsigned int base = std::min(cfg.DlssNrStyle.value_or_default(), 2u);
+
+    if (pass == 1 && cfg.DlssNrPass2Style.has_value())
+        return std::min(cfg.DlssNrPass2Style.value(), 2u);
+
+    if (pass == 2 && cfg.DlssNrPass3Style.has_value())
+        return std::min(cfg.DlssNrPass3Style.value(), 2u);
+
+    return base;
+}
+
+bool TuningMatchesFeature(const Config& cfg, unsigned int requestedPasses)
+{
+    if (g_nr.builtIntensity != cfg.DlssNrIntensity.value_or_default() ||
+        g_nr.builtLocalStructure != cfg.DlssNrLocalStructure.value_or_default() ||
+        g_nr.builtLocalTone != cfg.DlssNrLocalTone.value_or_default() ||
+        g_nr.builtSkinStructure != cfg.DlssNrSkinStructure.value_or_default() ||
+        g_nr.builtAutoMask != cfg.DlssNrAutoMask.value_or_default())
+        return false;
+
+    for (unsigned int pass = 0; pass < requestedPasses; ++pass)
+    {
+        // A profile cannot be stale until its feature exists. This lets a user prepare pass 2 or 3
+        // while running fewer layers without needlessly rebuilding pass 1.
+        if (pass > 0 && g_nr.passFeature[pass] == nullptr)
+            continue;
+
+        if (g_nr.builtPreset[pass] != PassPreset(cfg, pass) ||
+            g_nr.builtStyle[pass] != PassStyle(cfg, pass))
+            return false;
+    }
+
+    return true;
+}
+
+void RecordBuiltPrimaryTuning(const Config& cfg)
+{
+    g_nr.builtPreset[0] = PassPreset(cfg, 0);
     g_nr.builtIntensity = cfg.DlssNrIntensity.value_or_default();
-    g_nr.builtStyle = cfg.DlssNrStyle.value_or_default();
+    g_nr.builtStyle[0] = PassStyle(cfg, 0);
     g_nr.builtLocalStructure = cfg.DlssNrLocalStructure.value_or_default();
     g_nr.builtLocalTone = cfg.DlssNrLocalTone.value_or_default();
     g_nr.builtSkinStructure = cfg.DlssNrSkinStructure.value_or_default();
@@ -1713,7 +1753,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // effect when the feature is rebuilt. TuningMatchesFeature was written to notice that and then
     // never called, which is why every one of these controls appeared to do nothing until something
     // else -- a resolution change -- happened to force a rebuild by accident.
-    const bool tuningChanged = !TuningMatchesFeature(cfg);
+    const bool tuningChanged = !TuningMatchesFeature(cfg, requestedPasses);
 
     if (g_nr.feature != nullptr && (resolutionChanged || tuningChanged || placementChanged))
     {
@@ -1833,8 +1873,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         g_nr.feature =
             g_nr.create(snippet->wstring().c_str(), State::Instance().NVNGX_ApplicationDataPath.c_str(),
                         device, cmdList, g_nr.capabilityParams, workWidth, workHeight,
-                        (int) cfg.DlssNrPreset.value_or_default(),
-                        cfg.DlssNrIntensity.value_or_default(), (int) cfg.DlssNrStyle.value_or_default(),
+                        (int) PassPreset(cfg, 0),
+                        cfg.DlssNrIntensity.value_or_default(), (int) PassStyle(cfg, 0),
                         cfg.DlssNrLocalStructure.value_or_default(), cfg.DlssNrLocalTone.value_or_default(),
                         cfg.DlssNrSkinStructure.value_or_default(),
                         cfg.DlssNrAutoMask.value_or_default() ? 1 : 0,
@@ -1864,11 +1904,11 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         g_nr.reset = true;
         g_nr.featurePendingSubmission = true;
         g_nr.featureCreateEpoch = frame.SubmissionEpoch;
-        RecordBuiltTuning(cfg);
+        RecordBuiltPrimaryTuning(cfg);
         LOG_INFO("DLSS-NR running {} SR: target {}x{}, model {}x{}, guides {}x{} "
                  "(preset {}, intensity {}, style {}, build epoch {})",
                  frame.BeforeUpscale ? "before" : "after", width, height, workWidth, workHeight,
-                 guideWidth, guideHeight, g_nr.builtPreset, g_nr.builtIntensity, g_nr.builtStyle,
+                 guideWidth, guideHeight, g_nr.builtPreset[0], g_nr.builtIntensity, g_nr.builtStyle[0],
                  frame.SubmissionEpoch);
 
         // Creating and evaluating a feature in the same command list is the dice-roll that hung the
@@ -1962,8 +2002,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                 g_nr.passFeature[pass] = g_nr.create(
                     snippet->wstring().c_str(), State::Instance().NVNGX_ApplicationDataPath.c_str(),
                     device, cmdList, g_nr.capabilityParams, workWidth, workHeight,
-                    (int) cfg.DlssNrPreset.value_or_default(), cfg.DlssNrIntensity.value_or_default(),
-                    (int) cfg.DlssNrStyle.value_or_default(),
+                    (int) PassPreset(cfg, pass), cfg.DlssNrIntensity.value_or_default(),
+                    (int) PassStyle(cfg, pass),
                     cfg.DlssNrLocalStructure.value_or_default(),
                     // Local tone belongs to the frame and is applied by pass zero only.
                     0.0f, cfg.DlssNrSkinStructure.value_or_default(),
@@ -1971,11 +2011,15 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
 
                 if (g_nr.passFeature[pass] != nullptr)
                 {
+                    g_nr.builtPreset[pass] = PassPreset(cfg, pass);
+                    g_nr.builtStyle[pass] = PassStyle(cfg, pass);
                     g_nr.passNeedsReset[pass] = true;
                     g_nr.passPendingSubmission[pass] = true;
                     g_nr.passCreateEpoch[pass] = frame.SubmissionEpoch;
-                    LOG_INFO("DLSS-NR: feature for pass {} built at epoch {}; waiting for submission",
-                             pass + 1, frame.SubmissionEpoch);
+                    LOG_INFO("DLSS-NR: feature for pass {} built with preset {}, style {} at epoch {}; "
+                             "waiting for submission",
+                             pass + 1, g_nr.builtPreset[pass], g_nr.builtStyle[pass],
+                             frame.SubmissionEpoch);
                 }
                 else
                 {
@@ -2441,7 +2485,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             cmdList, passFeature, g_nr.capabilityParams, passInput, depthIn, motionIn, passOutput,
             workWidth, workHeight, guideWidth, guideHeight, g_nr.guideDepthInverted ? 1 : 0,
             passReset ? 1 : 0, cfg.DlssNrIntensity.value_or_default(),
-            (int) cfg.DlssNrStyle.value_or_default(), cfg.DlssNrLocalStructure.value_or_default(),
+            (int) PassStyle(cfg, pass), cfg.DlssNrLocalStructure.value_or_default(),
             passTone, cfg.DlssNrSkinStructure.value_or_default(),
             cfg.DlssNrAutoMask.value_or_default() ? 1 : 0, g_nr.guideMvScaleX * mvToWork,
             g_nr.guideMvScaleY * mvToWork);
@@ -2514,12 +2558,12 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         const NVSDK_NGX_Result presetResult =
             g_nr.capabilityParams->Get("DLSSNR.Hint.Render.Preset", &preset);
         LOG_DEBUG("DLSS-NR readback DLSSNR.Hint.Render.Preset -> {} (result 0x{:X}, we wrote {})", preset,
-                 (uint32_t) presetResult, cfg.DlssNrPreset.value_or_default());
+                 (uint32_t) presetResult, PassPreset(cfg, 0));
 
         LOG_DEBUG("DLSS-NR wrote intensity {}, local structure {}, local tone {}, skin {}, style {}",
                  cfg.DlssNrIntensity.value_or_default(), cfg.DlssNrLocalStructure.value_or_default(),
                  cfg.DlssNrLocalTone.value_or_default(), cfg.DlssNrSkinStructure.value_or_default(),
-                 cfg.DlssNrStyle.value_or_default());
+                 PassStyle(cfg, 0));
     }
 
     if (result == NVSDK_NGX_Result_Success)

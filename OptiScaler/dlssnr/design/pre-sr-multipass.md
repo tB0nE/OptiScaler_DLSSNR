@@ -7,6 +7,9 @@ This experimental branch adds two opt-in controls to the `[DlssNr]` section:
   deliberately forced to remain post-upscale because its input contract is not compatible with the
   PR #6 pre-SR path.
 - `Passes=N` selects one to three sequential model layers. The default is `1`.
+- `Pass2Preset`, `Pass2Style`, `Pass3Preset`, and `Pass3Style` optionally select a different built-in
+  profile for later layers. `auto` inherits pass 1. These are profiles inside one model runtime, not
+  separate model DLLs.
 
 ## Multipass lifetime and data flow
 
@@ -16,6 +19,12 @@ evaluated on the command-list recording that created it. Native DX12 uses the wr
 while the DX11/Vulkan bridges supply their post-submit frame counter. At most one extra feature is
 created per submitted frame. A failed extra creation is latched and the ready contiguous prefix
 remains active, rather than reusing the main feature or retrying every frame.
+
+Preset and style are read when a layer's feature is created. Pass 1 uses `Preset` and `Style`; later
+passes inherit those values unless their override is set. Changing an active layer's profile parks the
+whole generation for deferred release and rebuilds it through the same one-feature-per-submission
+sequence. Changing an inactive layer does not disturb pass 1; its profile is read when that layer is
+later enabled.
 
 The frame is encoded once. Its base proxy remains immutable while model answers ping-pong through two
 same-format, same-size resources:

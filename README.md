@@ -7,6 +7,7 @@ The upstream fork already provided experimental direct access to NVIDIA DLSS Neu
 
 - **Optional Neural Rendering before DLSS Super Resolution.** The model can process the DLSS input image—such as 1920x1080 in 4K Performance mode—before DLSS upscales it to the display resolution.
 - **Configurable multipass processing.** `[DlssNr] Passes=1..3` runs one, two, or three sequential neural evaluations. Each pass has independent persistent history; the final result is composed once against the original base image.
+- **Per-pass model profiles.** Passes 2 and 3 can inherit pass 1 or select their own built-in preset and style (`standard`, `natural`, or `cinematic`) without loading competing model DLLs.
 - **Guarded fallbacks.** Ray Reconstruction remains post-SR, and padded or offset dynamic-resolution inputs fall back to the existing post-SR path instead of using unsafe dimensions.
 - **Matching overlay and INI controls.** `RunBeforeSR` and `Passes` are exposed in both configuration and the OptiScaler overlay.
 - **Verified BG3 path.** Baldur's Gate 3 was tested with two neural passes at 1920x1080 followed by DLSS Super Resolution to 3840x2160.
@@ -14,6 +15,12 @@ The upstream fork already provided experimental direct access to NVIDIA DLSS Neu
 Download the exact tested BG3 package from the [BG3 pre-SR multipass release](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/bg3-presr-multipass-e16d5866). NVIDIA's proprietary `nvngx_dlssnr.dll` is required but is **not redistributed** here.
 
 Implementation details and safety invariants are documented in [the pre-SR multipass design note](OptiScaler/dlssnr/design/pre-sr-multipass.md). The remainder of this README is the upstream OptiScaler documentation.
+
+### Compatibility scope
+
+The implementation contains no BG3-specific executable names, offsets, or shaders. It is designed for 64-bit games whose DLSS Super Resolution call reaches OptiScaler's Direct3D 12 path, including its Direct3D 11/Vulkan-to-DX12 bridges. It has also run in Hogwarts Legacy and Cyberpunk 2077. Compatibility still depends on the game exposing valid colour, depth, motion-vector, resolution, and command-submission data through its upscaler integration.
+
+Ray Reconstruction deliberately uses the post-SR path. Native Vulkan currently retains the upstream post-SR implementation. Games with unusual loaders, multiple swapchains, offset/padded dynamic-resolution textures, anti-cheat, or another `dxgi.dll` mod may need a different OptiScaler proxy name or will use the guarded post-SR fallback.
 
 ---
 
