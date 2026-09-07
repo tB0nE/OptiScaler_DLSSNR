@@ -497,6 +497,18 @@ void EvaluateAfterUpscaleVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* para
 {
     auto& cfg = *Config::Instance();
 
+    if (cfg.DlssNrDeferredDlss.value_or_default())
+    {
+        static bool warnedDeferred = false;
+        if (!warnedDeferred)
+        {
+            LOG_WARN("DLSS-NR DeferredDLSS requires the D3D12 path or a D3D12 bridge; "
+                     "native Vulkan leaves the clean SR frame unchanged");
+            warnedDeferred = true;
+        }
+        return;
+    }
+
     if (!cfg.DlssNrEnabled.value_or_default())
         return;
 

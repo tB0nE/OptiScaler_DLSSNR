@@ -20,7 +20,10 @@ enum DlssNrMode : uint32_t
     DlssNrMode_Resolve = 1,    // proxy + the model's answer + the untouched copy -> the edited frame
     DlssNrMode_Downsample = 2, // the proxy -> a smaller proxy, when the model works below full size
     DlssNrMode_Meter = 3,      // the exposure texture -> tile (0,0), for the white point
-    DlssNrMode_Calibrate = 4   // the untouched frame -> a grid of tile peak luminances
+    DlssNrMode_Calibrate = 4,  // the untouched frame -> a grid of tile peak luminances
+    DlssNrMode_EncodeResidual = 5, // NR-composed minus original; signed difference encoded around 0.5
+    DlssNrMode_ApplyResidual = 6,  // decode private DLSS result and add to clean SR output
+    DlssNrMode_UnitExposure = 7    // constant exposure for the private DLSS feature
 };
 
 // The meter's grid. 64 x 64 tiles over the whole frame, whatever its size.
@@ -74,6 +77,8 @@ struct DlssNrFrameInfo
     // a UAV. The DX12 pass uses this to preserve the caller's state and to fall back through a copy
     // when a pre-SR colour resource was not created with UAV support.
     bool BeforeUpscale = false;
+    // Owned copy, not the game's Color: always arrives/returns NON_PIXEL_SHADER_RESOURCE.
+    bool PrivateColorCopy = false;
     // A native RR result selects independent NR cost controls and a separate history lifecycle.
     bool AfterRayReconstruction = false;
 

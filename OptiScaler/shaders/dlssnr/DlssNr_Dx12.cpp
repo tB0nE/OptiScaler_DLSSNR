@@ -177,6 +177,7 @@ struct NrPassTuning
 
 struct NrState
 {
+    unsigned long long successfulDispatches = 0;
     HMODULE forwarder = nullptr;
     PFN_NrCreate create = nullptr;
     PFN_NrEvaluate evaluate = nullptr;
@@ -1428,7 +1429,7 @@ void RecordBuiltPrimaryTuning(const Config& cfg)
 // Guards the module's state. Every caller is now on the game's render thread, so this is no longer
 // holding two threads apart -- but the D3D11-on-D3D12 bridge enters from its own call site, and the
 // cost is a CPU-side lock on a path that already records command lists.
-std::mutex g_nrMutex;
+std::recursive_mutex g_nrMutex;
 
 // Runs the pass inside the same state envelope every other OptiScaler compute pass runs in.
 //
@@ -1610,7 +1611,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                            ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* output,
                            const DlssNrFrameInfo& frame, ID3D12CommandQueue* timingQueue)
 {
-    std::lock_guard<std::mutex> nrLock(g_nrMutex);
+    std::lock_guard<std::recursive_mutex> nrLock(g_nrMutex);
     const Config& cfg = *Config::Instance();
 
     if (g_nr.failed || cmdList == nullptr || colour == nullptr || depth == nullptr ||
@@ -1640,7 +1641,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // it to us; a pre-SR resource without UAV support is written through a scratch-and-copy fallback.
     const D3D12_RESOURCE_STATES outputArrival =
         frame.BeforeUpscale
-            ? (Config::Instance()->ColorResourceBarrier.has_value()
+            ? (!frame.PrivateColorCopy && Config::Instance()->ColorResourceBarrier.has_value()
                    ? (D3D12_RESOURCE_STATES) Config::Instance()->ColorResourceBarrier.value()
                    : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)
             : Config::Instance()->OutputResourceBarrier.has_value()
@@ -2867,6 +2868,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // Failed evaluations leave the game's original image intact. A successful copy-back writes
     // only the active rectangle and restores both resources before DLSS consumes the image.
     FinishColor(result == NVSDK_NGX_Result_Success);
+    if (result == NVSDK_NGX_Result_Success)
+        ++g_nr.successfulDispatches;
 
     if (g_gpuTime != nullptr)
     {
@@ -2932,6 +2935,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
 
 namespace DlssNr
 {
+#include "DlssNr_DeferredSr.inl"
+
 void RetryAfterFailure()
 {
     g_nr.failed = false;
@@ -2949,7 +2954,25 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
                       bool beforeUpscale, ID3D12CommandQueue* timingQueue, bool forcePost,
                       unsigned long long submissionEpoch)
 {
+    std::lock_guard<std::recursive_mutex> nrLock(g_nrMutex);
     const Config& cfg = *Config::Instance();
+
+    // The deferred route owns both seams. Never fall through to in-place NR if it is waiting,
+    // unsupported, or failed: that would contaminate the clean SR input used by this experiment.
+    if (!cfg.DlssNrEnabled.value_or_default() || !cfg.DlssNrDeferredDlss.value_or_default() || forcePost)
+        DeferredSr::Cancel();
+    else
+    {
+        if (cmdList != nullptr && params != nullptr)
+        {
+            const auto epoch = timingQueue != nullptr ? submissionEpoch : State::Instance().frameCount;
+            if (beforeUpscale)
+                DeferredSr::Before(cmdList, params, epoch, timingQueue);
+            else
+                DeferredSr::After(cmdList, params, epoch);
+        }
+        return;
+    }
 
     if (!cfg.DlssNrEnabled.value_or_default())
     {
@@ -3257,7 +3280,7 @@ void ProbeD3D11(void* d3d11Device)
 
     // Every other entry point in this file takes the lock before touching g_nr; this one was reaching
     // EnsureForwarder without it.
-    std::lock_guard<std::mutex> nrLock(g_nrMutex);
+    std::lock_guard<std::recursive_mutex> nrLock(g_nrMutex);
 
     // Opt in only. See the note on DlssNrProbeD3D11: this is the one call in the pass that reaches
     // into a subsystem on the game's own device rather than reading something we already hold.
@@ -3414,7 +3437,8 @@ bool CaptureInProgress() { return g_capture.isActive(); }
 
 void Shutdown()
 {
-    std::lock_guard<std::mutex> nrLock(g_nrMutex);
+    std::lock_guard<std::recursive_mutex> nrLock(g_nrMutex);
+    DeferredSr::Shutdown();
 
     for (auto& r : g_nrRetired)
     {

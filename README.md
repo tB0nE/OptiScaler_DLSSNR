@@ -61,6 +61,10 @@ release. This supplies dependencies, not a guarantee of injected FG compatibilit
 
 ### New compatibility work (not yet game-validated)
 
+- Experimental source: **Generate before SR, apply after SR (DLSS)** runs NR on a private
+  render-size copy, upscales its signed contribution through a separate NVIDIA DLSS feature and applies
+  it to the clean upscaled frame. [Setup, encoding and validation limits](docs/DEFERRED-NR-DLSS.md).
+  Not yet game-validated.
 - Padded pre-SR colour inputs, including the reported 2558x1439-in-2560x1440 case, no longer fall
   back to 4K NR merely because the allocation is larger. [Details and testing](docs/PADDED-PRESR.md).
 - Optional skin-colour protection with separate skin/environment lighting and colour controls.

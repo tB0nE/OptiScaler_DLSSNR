@@ -1,6 +1,7 @@
 #pragma once
 
 #include <d3d12.h>
+#include <string>
 
 #include <shaders/dlssnr/DlssNr_Common.h>
 #include <nvsdk_ngx.h>
@@ -97,6 +98,8 @@ CalibrationReading Calibration();
 
 // Whether the model is loaded and running, for the overlay.
 bool IsRunning();
+// Private residual-upscaler status; separate from the NR model's own running status/time.
+std::string DeferredDlssStatus();
 
 // Why it is not, if it is not. Empty while it is running or has not been tried yet.
 const char* FailureReason();

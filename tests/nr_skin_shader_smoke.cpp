@@ -83,5 +83,33 @@ int wmain(int argc, wchar_t** argv) try {
     settings.ShowSkinMask=0; settings.ApplyModel=0; result=run();
     expect(same(result[0],base[0]) && same(result[1],base[1]), "Model bypass did not preserve input");
     std::puts("PASS: disabled/unity identity, zero restore, skin/scene separation, preview, model bypass (WARP HLSL)");
+
+    // Exercise the exact new carrier shader independently of proprietary DLSS/NR. Both positive
+    // and negative RGB changes must survive encoding; neutral must leave the clean raster intact.
+    const std::array<Pixel,2> carrierBase {{{2.0f,0.25f,0.75f,0.25f}, {0.10f,1.50f,0.30f,0.75f}}};
+    const std::array<Pixel,2> carrierEdit {{{1.0f,0.50f,0.70f,0.25f}, {0.20f,0.25f,0.40f,0.75f}}};
+    ctx->UpdateSubresource(original.Get(),0,nullptr,carrierBase.data(),sizeof(carrierBase),0);
+    ctx->UpdateSubresource(model.Get(),0,nullptr,carrierEdit.data(),sizeof(carrierEdit),0);
+    settings.Mode=DlssNrMode_EncodeResidual; settings.ExposurePreMul=2.0f;
+    auto carrier=run();
+    expect(carrier[0].r<0.5f && carrier[0].g>0.5f && carrier[1].g<0.5f,
+           "Signed residual lost shadow/brightening information");
+    ctx->UpdateSubresource(model.Get(),0,nullptr,carrier.data(),sizeof(carrier),0);
+    settings.Mode=DlssNrMode_ApplyResidual; result=run();
+    expect(same(result[0],carrierEdit[0]) && same(result[1],carrierEdit[1]),
+           "Residual roundtrip or original alpha preservation failed");
+    const std::array<Pixel,2> neutral {{{0.5f,0.5f,0.5f,1}, {0.5f,0.5f,0.5f,1}}};
+    ctx->UpdateSubresource(model.Get(),0,nullptr,neutral.data(),sizeof(neutral),0);
+    result=run(); expect(same(result[0],carrierBase[0]) && same(result[1],carrierBase[1]),
+                         "Neutral carrier altered the clean raster");
+    const std::array<Pixel,2> overshoot {{{-1,2,0.5f,1}, {INFINITY,NAN,0.5f,1}}};
+    ctx->UpdateSubresource(model.Get(),0,nullptr,overshoot.data(),sizeof(overshoot),0);
+    result=run();
+    for (const auto pixel : result)
+        expect(std::isfinite(pixel.r) && std::isfinite(pixel.g) && std::isfinite(pixel.b) &&
+               pixel.r>=0 && pixel.g>=0 && pixel.b>=0, "Carrier overshoot produced invalid output");
+    settings.Mode=DlssNrMode_UnitExposure; result=run();
+    expect(result[0].r==1 && result[1].r==1, "Private DLSS exposure is not fixed at one");
+    std::puts("PASS: signed residual, shadow/brightening roundtrip, neutral identity, alpha, overshoot, unit exposure");
     return 0;
 } catch (const std::exception& e) { std::fprintf(stderr,"FAIL: %s\n",e.what()); return 1; }

@@ -127,8 +127,13 @@ void RenderMenu(Config* config, float menuResScale)
                    "\nUndocumented and driven directly, so none of this is officially supported.");
 
         bool beforeSr = config->DlssNrRunBeforeSr.value_or_default();
+        const bool deferredActive = config->DlssNrDeferredDlss.value_or_default();
+        if (deferredActive)
+            ImGui::BeginDisabled();
         if (ImGui::Checkbox("Apply before Super Resolution", &beforeSr))
             config->DlssNrRunBeforeSr = beforeSr;
+        if (deferredActive)
+            ImGui::EndDisabled();
 
         HelpMarker("Runs Neural Rendering on the render-resolution colour input immediately before"
                    "\nSuper Resolution, so SR temporally accumulates and upscales the enhanced frame."
@@ -137,6 +142,19 @@ void RenderMenu(Config* config, float menuResScale)
                    "\ninputs use their active render size; offset or invalid inputs fall back post-SR."
                    "\n\nThis placement control currently applies to the Direct3D 12 path and its"
                    "\nDirect3D 11/Vulkan bridges; native Vulkan keeps the post-upscale path.");
+
+        bool deferredDlss = config->DlssNrDeferredDlss.value_or_default();
+        if (ImGui::Checkbox("Generate before SR, apply after SR (DLSS)", &deferredDlss))
+            config->DlssNrDeferredDlss = deferredDlss;
+        HelpMarker("Experimental: the game raster stays clean. NR runs on a render-size copy, then"
+                   "\na private DLSS SR feature upscales its signed contribution for application after SR."
+                   "\nThe contribution is encoded around neutral grey; DLSS may distort it or flicker."
+                   "\nRequires an NVIDIA DLSS SR runtime. No spatial/FSR fallback is used on failure."
+                   "\nOverrides the pre-SR checkbox, not RR. Native Vulkan is not supported."
+                   "\nNR's displayed GPU time excludes the additional DLSS/composition cost."
+                   "\nDisable frame hold, debug views and comparison modes for this experiment.");
+        if (deferredDlss)
+            ImGui::TextWrapped("Residual DLSS: %s", DlssNr::DeferredDlssStatus().c_str());
 
         bool afterRR = config->DlssNrApplyAfterRR.value_or_default();
         if (ImGui::Checkbox("Apply after Ray Reconstruction (DX12)", &afterRR))

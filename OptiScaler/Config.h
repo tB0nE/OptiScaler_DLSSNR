@@ -260,6 +260,9 @@ class Config
     // Run the NR pass on the upscaler's colour input, at render resolution, immediately before SR.
     // Off preserves the v0.2.0 post-upscale placement.
     CustomOptional<bool> DlssNrRunBeforeSr { false };
+    // Generate NR before SR, upscale its signed contribution with a private DLSS feature,
+    // and apply it after the game's upscaler. Takes precedence over RunBeforeSR; opt-in.
+    CustomOptional<bool> DlssNrDeferredDlss { false };
     CustomOptional<bool> DlssNrApplyAfterRR { false };
     CustomOptional<unsigned int> DlssNrRRPasses { 1 };
     CustomOptional<float> DlssNrRRWorkingScale { 0.5f };
