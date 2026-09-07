@@ -333,6 +333,14 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 
         if (presentResult == S_OK)
         {
+            // DXVK returns below before the native path advances the NR epoch.
+            // Count a completed Present; retain the deferred NR evaluation guard.
+            if (willPresent)
+            {
+                _frameCounter++;
+                State::Instance().frameCount = _frameCounter;
+            }
+
             LOG_TRACE("3 {}", (UINT) presentResult);
         }
         else if (presentResult == DXGI_ERROR_DEVICE_REMOVED)
