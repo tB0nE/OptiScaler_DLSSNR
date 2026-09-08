@@ -121,7 +121,12 @@ void RenderMenu(Config* config, float menuResScale)
         if (ImGui::Checkbox("Enable Neural Rendering", &enabled))
             config->DlssNrEnabled = enabled;
 
-        HelpMarker("Synthesises detail in the upscaler's frame, before frame generation sees it."
+        HelpMarker("A one-step neural model that moves the frame toward a photographic look -- richer"
+                   "\nmaterials and lighting -- while holding on to the rendered scene, down to its"
+                   "\nstructural edges and even its aliasing. It runs on the upscaled frame by default;"
+                   "\nthe placement options below can instead run it before Super Resolution. Either"
+                   "\nway it lands before frame generation, and is deterministic: the same frames in"
+                   "\ngive the same frames out. It enhances a good frame; it does not repair a broken one."
                    "\n\nNeeds two similarly named files beside OptiScaler, one character apart:"
                    "\n  nvngx_dlssnr.dll       NVIDIA's model (~165 MB) -- you supply it"
                    "\n  nvngx.dll_dlssnr.dll   the forwarder (~13 KB) -- ships in this package"
@@ -149,8 +154,12 @@ void RenderMenu(Config* config, float menuResScale)
         const char* precisions[] = { "FP8 (NVIDIA DLL)", "attempt at NVFP4 hybrid" };
         if (ImGui::Combo("Model precision", &precisionChoice, precisions, IM_ARRAYSIZE(precisions)))
             config->DlssNrPrecision = precisionChoice == 1 ? 2u : 0u;
-        if (precisionChoice == 1)
-            HelpMarker("VERY minor improvements on Blackwell.");
+        HelpMarker("NVIDIA's shipped model runs most of its matrix maths in FP8 and keeps a few"
+                   "\nnumerically sensitive multiplies at FP16, and the whole thing is tuned for"
+                   "\nBlackwell. Their own figures put FP8 within a small quality difference of full"
+                   "\nFP16 at roughly twice the speed, so FP8 here is the reference path."
+                   "\n\nNVFP4 is not part of that design -- it is this fork's own experiment at pushing"
+                   "\nsome layers to 4-bit on Blackwell, for VERY minor gains and only there.");
         const auto hybridStatus = DlssNrNative::Status();
         if (hybridStatus.rfind("Restart required:", 0) == 0 ||
             (precisionChoice == 1 && hybridStatus.find("fallback") != std::string::npos))
@@ -483,18 +492,51 @@ void RenderMenu(Config* config, float menuResScale)
             int style = (int) std::min(config->DlssNrStyle.value_or_default(), 2u);
             if (ImGui::Combo("Style", &style, styles, IM_ARRAYSIZE(styles)))
                 config->DlssNrStyle = (uint32_t) style;
+            HelpMarker("Which learned look the model aims for. NVIDIA trains not one model but a small"
+                       "\nset of them, each landing in a different part of the photographic-appearance"
+                       "\nrange -- they differ in tone, in colour, and in how they render materials,"
+                       "\nfoliage, light and skin. This picks between them: it is a destination, not a"
+                       "\nstrength, and the sliders below decide how far the frame travels toward it."
+                       "\n\nThe model targets realism rather than a style filter, so the choice is which"
+                       "\nphotographic rendition, not which mood.");
             DeferredSlider("Intensity", &config->DlssNrIntensity, 0.0f, 2.0f, 1.0f);
+            HelpMarker("Overall strength of the model's enhancement for this pass -- the DLSSNR.Intensity"
+                       "\nknob. 0 hands the frame back untouched; 1 is the full learned transformation."
+                       "\nThose two points are the domain NVIDIA documents. The slider runs to 2, but"
+                       "\npast 1 it asks for more than the model was trained to give, and whether the"
+                       "\nDLL acts on that or clamps it is unverified."
+                       "\n\nLocal structure and local tone below are the two halves of this same"
+                       "\nenhancement and can be set independently of it.");
             DeferredSlider("Local structure", &config->DlssNrLocalStructure, 0.0f, 2.0f, 1.0f);
+            HelpMarker("The high-frequency half of the enhancement: fine surface detail and local"
+                       "\ncontrast -- the pores, weave and grain the model synthesises. NVIDIA folds a"
+                       "\nfrequency split into the network and drives this band with one strength."
+                       "\n\n0 leaves the frame's own detail alone; 1 is the full learned amount -- the"
+                       "\n0..1 NVIDIA documents. Above 1 the slider carries past what the model asked for.");
             DeferredSlider("Local tone", &config->DlssNrLocalTone, 0.0f, 2.0f, 1.0f);
+            HelpMarker("The low-frequency half of the enhancement: broad luminance and the illumination"
+                       "\nof whole scene elements -- how light sits across a surface rather than the"
+                       "\ndetail on it."
+                       "\n\n0 keeps the frame's own tone; 1 is the full learned amount -- the 0..1"
+                       "\nNVIDIA documents. Above 1 pushes past it. Later passes default this to 0, so"
+                       "\nonly pass 1 reshapes tone.");
             DeferredSlider("Skin structure", &config->DlssNrSkinStructure, -1.0f, 2.0f, -1.0f);
-            HelpMarker("-1 follows local structure; 0 reduces skin structure independently."
-                       "\nThis is not a skin-colour/tone off switch. Use the final skin/scene controls below for that.");
+            HelpMarker("Local structure, but only for the pixels the model recognises as skin -- it"
+                       "\ncarries a learned sense of that semantic group (and will count alien or"
+                       "\nreptilian skin too). Lets faces hold a softer structure than the rest of the"
+                       "\nframe."
+                       "\n\n-1 follows local structure; 0 reduces skin structure independently. The 0..1"
+                       "\ndomain and the past-1 caveat are the same as local structure. Not a"
+                       "\nskin-colour/tone off switch -- use the final skin/scene controls below for that.");
             bool mask = config->DlssNrAutoMask.value_or_default();
             if (ImGui::Checkbox("Auto skin mask", &mask))
                 config->DlssNrAutoMask = mask;
-            HelpMarker("NVIDIA's internal automatic mask, not the colour-based preview below."
-                       "\nWith Skin structure=-1 it follows general structure, so the difference may be subtle."
-                       "\nTry Skin structure=0 versus Local structure=1 to compare. Mask accuracy is model-dependent.");
+            HelpMarker("Switches on the skin mask NVIDIA trained into the model, so the skin strength"
+                       "\nabove applies wherever the model itself sees skin -- no authored mask needed."
+                       "\nThis is that learned semantic mask, not the colour-based preview lower down."
+                       "\n\nWith Skin structure=-1 it follows general structure, so the difference may be"
+                       "\nsubtle. Try Skin structure=0 versus Local structure=1 to compare. Mask accuracy"
+                       "\nis model-dependent.");
             ImGui::TreePop();
         }
 
