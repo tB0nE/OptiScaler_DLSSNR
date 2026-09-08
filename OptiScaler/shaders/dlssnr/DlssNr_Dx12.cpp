@@ -437,6 +437,44 @@ void ClearCaptureDirectory()
 
 unsigned long long g_frames = 0;
 
+// The epoch the deferred NR seams key their per-frame bookkeeping on.
+//
+// The obvious source, State::Instance().frameCount, counts *presented* frames: wrapped_swapchain
+// skips its increment on a DXGI_PRESENT_TEST -- an occlusion probe that flip-model games issue
+// between real frames, and that DXGI asks for after DXGI_STATUS_OCCLUDED. When it stalls, two
+// consecutively rendered frames hand DeferredSr::Before the same epoch; the Before guard reads that
+// as a duplicate upscale, resets NR history and skips the contribution for that frame -- a visible
+// flash, alternating with the frames where it does run. (The DX11/Vulkan bridges pass their own
+// submitted-frame counter and do not have this. The in-place NR path below is left on the raw
+// counter -- it does not bracket a private SR and has no history-continuity gate.)
+//
+// So: follow the real epoch whenever it moves, and on a Before seam synthesise a +1 tick when it
+// does not. Strictly monotonic, advances by exactly one per rendered frame in the common case --
+// which is also what the "epoch == last + 1" history-continuity checks want.
+unsigned long long g_nrRawEpoch = ~0ull;
+unsigned long long g_nrSeamEpoch = 0;
+
+unsigned long long NrSeamEpoch(bool beginSeam, ID3D12CommandQueue* timingQueue, unsigned long long submissionEpoch)
+{
+    const unsigned long long raw = timingQueue != nullptr ? submissionEpoch : State::Instance().frameCount;
+
+    if (raw != g_nrRawEpoch)
+    {
+        // Follow a forward jump (real frames genuinely elapsed -- e.g. the menu was open); never
+        // repeat or rewind.
+        g_nrSeamEpoch = raw > g_nrSeamEpoch ? raw : g_nrSeamEpoch + 1;
+        g_nrRawEpoch = raw;
+    }
+    else if (beginSeam)
+    {
+        // Raw epoch stalled between two rendered frames (a test-present) -- synthesise the tick so
+        // the NR seam is not misread as a duplicate.
+        ++g_nrSeamEpoch;
+    }
+
+    return g_nrSeamEpoch;
+}
+
 // A capture requested from outside the game: when the render path has no fence of its own, the write
 // waits until this frame count, by which point the GPU is certainly past the copies.
 unsigned long long g_captureWriteAtFrame = 0;
@@ -2999,7 +3037,7 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
     {
         if (cmdList != nullptr && params != nullptr)
         {
-            const auto epoch = timingQueue != nullptr ? submissionEpoch : State::Instance().frameCount;
+            const auto epoch = NrSeamEpoch(beforeUpscale, timingQueue, submissionEpoch);
             if (beforeUpscale)
                 DeferredSr::Before(cmdList, params, epoch, timingQueue);
             else

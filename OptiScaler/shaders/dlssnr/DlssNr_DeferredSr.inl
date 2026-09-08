@@ -362,6 +362,9 @@ void Before(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
     else device->Release();
     auto& g = *current;
     if (g.failed) return;
+    // NrSeamEpoch() (DlssNr_Dx12.cpp) advances the epoch on every Before seam even when the
+    // presented-frame counter stalls (a DXGI_PRESENT_TEST between two rendered frames), so this
+    // is only reachable on a genuine second upscale in one NR frame. Skip it; the next runs.
     if (g.began && g.lastBeginEpoch == epoch)
     { g.reset = true; Say("inactive: more than one upscale in a submission epoch"); return; }
     g.began = true;
@@ -508,7 +511,9 @@ bool ResolvePrivate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
                     unsigned long long epoch, ID3D12Resource* destination)
 {
     const auto pair = pending; pending = {};
-    if (!current || current->failed || pair.cmd != cmd || pair.caller != source || pair.epoch != epoch)
+    // No epoch match, as in After() -- see the comment there. (Dead path on this branch: async NR
+    // was removed in v0.7.1 and nothing calls ResolvePrivate; kept consistent for a future revival.)
+    if (!current || current->failed || pair.cmd != cmd || pair.caller != source)
         return false;
     auto& g = *current;
     Use use(g, cmd);
@@ -529,7 +534,18 @@ void After(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source, unsigned
 {
     const auto pair = pending;
     pending = {}; // Consume once, only for the immediately matching successful upscale.
-    if (!current || current->failed || pair.cmd != cmd || pair.caller != source || pair.epoch != epoch ||
+    // Deliberately no epoch match. `epoch` is NrSeamEpoch() (DlssNr_Dx12.cpp), which is monotonic on
+    // the Before seam but on this After seam still just follows the raw presented-frame counter --
+    // and that counter is incremented from the wrapped swapchain's Present handler, on a thread that
+    // runs concurrently with the render thread recording this evaluate. In a pipelined engine it can
+    // tick between this evaluate's Before and After seam (observed +1 one-to-two times a second in
+    // NBA 2K26, Frame Generation OFF -- FG only raises the present rate, it is not required), which
+    // is not a frame boundary. Freshness is already structural: Before() clears `pending` at the top
+    // of every frame and it is consumed once here, so a surviving pending is always this evaluate's.
+    // Identity is the cmd list + parameter block + output resource triple. Gating on the epoch here
+    // only manufactured spurious private-SR history restarts -> temporal reset -> a two-frame
+    // reconstruction pop (the reported screen flash).
+    if (!current || current->failed || pair.cmd != cmd || pair.caller != source ||
         pair.output != GetResource(source, NVSDK_NGX_Parameter_Output, "DLSSD.Output"))
     { if (current) current->reset = true; return; }
     auto& g = *current;
