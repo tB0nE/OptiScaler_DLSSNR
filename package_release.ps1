@@ -14,6 +14,7 @@ param(
     [switch]$SkipBuild,
     [switch]$IncludeDlssFrameGeneration,
     [switch]$AcceptNvidiaLicenses,
+    [string]$HybridAssetsDirectory,
     [string]$StreamlineArchive
 )
 
@@ -186,6 +187,12 @@ if ($on) {
 
 Write-Host "ini verified: nothing switched on by default"
 
+foreach ($key in @('DeferredDLSS', 'ResidualFG', 'ResidualFGApproxCamera')) {
+    if ($ini -match "(?mi)^$key=true\s*$") {
+        throw "REFUSING: experimental option $key is enabled in the portable package"
+    }
+}
+
 # The proprietary runtime must never slip into a public artifact. Its two approved hashes are
 # documentation/diagnostic inputs only; users obtain the GPU-appropriate file themselves.
 if (Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object { $_.Name -ieq 'nvngx_dlssnr.dll' }) {
@@ -199,6 +206,19 @@ foreach ($requiredTextFile in @("$stage\README.md", "$stage\INSTALL-DLSSNR.md", 
     }
 }
 Write-Host "cross-generation guidance: present and hash-pinned"
+
+if ($HybridAssetsDirectory) {
+    $manifest = Get-Content -LiteralPath (Join-Path $HybridAssetsDirectory 'asset-manifest.json') -Raw | ConvertFrom-Json
+    foreach ($item in $manifest.files) {
+        $assetRoot = [IO.Path]::GetFullPath((Join-Path $HybridAssetsDirectory 'OptiScaler/nvfp4/hybrid'))
+        $source = [IO.Path]::GetFullPath((Join-Path $assetRoot $item.path))
+        if (-not $source.StartsWith($assetRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid hybrid asset path' }
+        if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $item.sha256) { throw "Hybrid asset hash mismatch: $source" }
+        $target = Join-Path "$stage/OptiScaler/nvfp4/hybrid" $item.path
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+        Copy-Item -LiteralPath $source -Destination $target
+    }
+}
 
 # Hash every shipped file after the staging tree is final. Use forward slashes so the list is easy
 # to verify from PowerShell, 7-Zip, Linux, or Wine.

@@ -2963,7 +2963,6 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
 namespace DlssNr
 {
 #include "DlssNr_DeferredSr.inl"
-
 std::string DeferredDlssStatus() { return SynchronousDeferredDlssStatus(); }
 
 void RetryAfterFailure()
