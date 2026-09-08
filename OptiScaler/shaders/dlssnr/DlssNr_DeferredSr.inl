@@ -269,12 +269,24 @@ bool PrepareHalfRate(Generation& g, ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Pa
 void Before(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
             unsigned long long epoch, ID3D12CommandQueue* queue, bool privateJob = false)
 {
-    if (pending.cmd && current) current->reset = true; // abandoned/failed main SR call
+    if (pending.cmd && current)
+    {
+        LOG_DEBUG("DLSS-NR deferred: Before entry with a stale pending (previous After never ran) -> reset. epoch {}", epoch);
+        current->reset = true; // abandoned/failed main SR call
+    }
     pending = {};
     struct ResetOnGap
     {
-        ~ResetOnGap() { if (!pending.cmd && current) { current->reset = true; current->hold.Reset(); if (current->half) current->half->Reset(); } }
-    } resetOnGap;
+        unsigned long long epoch;
+        ~ResetOnGap()
+        {
+            if (!pending.cmd && current)
+            {
+                LOG_DEBUG("DLSS-NR deferred: Before returned without arming a seam -> reset + hold/half cleared. epoch {}", epoch);
+                current->reset = true; current->hold.Reset(); if (current->half) current->half->Reset();
+            }
+        }
+    } resetOnGap { epoch };
     Collect();
     const auto& cfg = *Config::Instance();
     if (cfg.DlssNrUseProxy.value_or_default() || cfg.DlssNrHoldFrame.value_or_default() ||
@@ -408,7 +420,8 @@ void Before(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
         Say("private DLSS created; waiting for a later submission epoch");
         return;
     }
-    if (epoch == g.createEpoch) return;
+    if (epoch == g.createEpoch)
+    { LOG_DEBUG("DLSS-NR deferred: Before skipped -- epoch {} == createEpoch (feature built this frame)", epoch); return; }
 
     if (g.sampleAndHold)
     {
@@ -499,6 +512,8 @@ void Before(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
             p->Set(NVSDK_NGX_Parameter_DLSS_Exposure_Scale, 1.0f);
             p->Set(NVSDK_NGX_Parameter_Sharpness, 0.0f);
             pending = { cmd, source, output, epoch, frame.PreExposure, false, half };
+            LOG_DEBUG("DLSS-NR deferred: Before armed epoch {} half {} preExp {:.4f} reset-carried {}", epoch, half,
+                      frame.PreExposure, frame.Reset);
         }
     }
     else { g.reset = true; Say("waiting for NR evaluation; clean SR frame retained"); }
@@ -547,7 +562,14 @@ void After(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source, unsigned
     // reconstruction pop (the reported screen flash).
     if (!current || current->failed || pair.cmd != cmd || pair.caller != source ||
         pair.output != GetResource(source, NVSDK_NGX_Parameter_Output, "DLSSD.Output"))
-    { if (current) current->reset = true; return; }
+    {
+        LOG_DEBUG("DLSS-NR deferred: After no-op -> reset. current={} failed={} cmdMatch={} callerMatch={} "
+                  "epoch(pending/now)={}/{} outputMatch={}",
+                  current != nullptr, current && current->failed, pair.cmd == cmd, pair.caller == source, pair.epoch,
+                  epoch, pair.output == GetResource(source, NVSDK_NGX_Parameter_Output, "DLSSD.Output"));
+        if (current) current->reset = true;
+        return;
+    }
     auto& g = *current;
     const auto& cfg = *Config::Instance();
     if ((cfg.RestoreComputeSignature.value_or_default() || cfg.RestoreGraphicSignature.value_or_default()) &&
@@ -562,6 +584,11 @@ void After(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source, unsigned
         if (result != NVSDK_NGX_Result_Success)
         { g.failed = true; if (g.half) g.half->Reset(); Say("private DLSS evaluation failed: " + std::to_string((unsigned)result)); return; }
     }
+    if (g.reset)
+        LOG_DEBUG("DLSS-NR deferred: After fed Reset=1 to the private DLSS SR this frame (history restart). "
+                  "epoch {} skipNr {} half {}", epoch, pair.skipNr, pair.half);
+    else
+        LOG_TRACE("DLSS-NR deferred: After applied epoch {} skipNr {} half {}", epoch, pair.skipNr, pair.half);
     g.reset = false;
     Barrier(cmd, g.residualOutput, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     bool half = pair.half && g.half && !g.half->failed;
