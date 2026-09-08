@@ -3,6 +3,7 @@
 
 #include "DlssNr.h"
 #include "DlssNr_ExposureScan.h"
+#include "DlssNrNative.h"
 
 
 #include <Config.h>
@@ -144,6 +145,16 @@ void RenderMenu(Config* config, float menuResScale)
                    "\nDirect3D 11/Vulkan bridges; native Vulkan keeps the post-upscale path.");
 
         bool deferredDlss = config->DlssNrDeferredDlss.value_or_default();
+        int precisionChoice = config->DlssNrPrecision.value_or_default() == 2 ? 1 : 0;
+        const char* precisions[] = { "FP8 (NVIDIA DLL)", "attempt at NVFP4 hybrid" };
+        if (ImGui::Combo("Model precision", &precisionChoice, precisions, IM_ARRAYSIZE(precisions)))
+            config->DlssNrPrecision = precisionChoice == 1 ? 2u : 0u;
+        if (precisionChoice == 1)
+            HelpMarker("VERY minor improvements on Blackwell.");
+        const auto hybridStatus = DlssNrNative::Status();
+        if (hybridStatus.rfind("Restart required:", 0) == 0 ||
+            (precisionChoice == 1 && hybridStatus.find("fallback") != std::string::npos))
+            ImGui::TextWrapped("%s", hybridStatus.c_str());
         if (ImGui::Checkbox("Generate before SR, apply after SR (DLSS)", &deferredDlss))
             config->DlssNrDeferredDlss = deferredDlss;
         HelpMarker("Experimental: the game raster stays clean. NR runs on a render-size copy, then"
@@ -155,6 +166,26 @@ void RenderMenu(Config* config, float menuResScale)
                    "\nDisable frame hold, debug views and comparison modes for this experiment.");
         if (deferredDlss)
             ImGui::TextWrapped("Residual DLSS: %s", DlssNr::DeferredDlssStatus().c_str());
+        ImGui::BeginDisabled(!deferredDlss);
+        bool residualFg = config->DlssNrResidualFg.value_or_default();
+        if (ImGui::Checkbox("NR every second frame (NVIDIA FG, experimental)", &residualFg))
+            config->DlssNrResidualFg = residualFg;
+        HelpMarker("Uses NVIDIA interpolation on the DLSS-upscaled residual, not full game frames."
+                   "\nBuffers the matching clean SR image and residual by one rendered frame."
+                   "\nWARNING: later game effects may still use newer-frame data; motion blur,"
+                   "\nlighting effects and UI may not align. Adds latency and GPU/VRAM cost."
+                   "\nRequires a working NVIDIA FG runtime, low-resolution non-jittered motion vectors."
+                   "\nWith no motion texture: sample-and-hold applies each residual to two CURRENT"
+                   "\nframes, with no residual FG or raster delay. Fresh private NR/SR samples use"
+                   "\nzero guides with history reset; the game's own upscaler still needs valid inputs."
+                   "\nCuts and failed evaluations reset history; rejected FG output retains clean colour.");
+        bool approxCamera = config->DlssNrResidualFgApproxCamera.value_or_default();
+        if (ImGui::Checkbox("Allow approximate FG camera guides (experimental)", &approxCamera))
+            config->DlssNrResidualFgApproxCamera = approxCamera;
+        HelpMarker("Explicit fallback for games/bridges without full camera transforms."
+                   "\nUses real motion vectors, but approximate projection and camera transforms."
+                   "\nCamera movement and disocclusions may produce artifacts. Not reference-quality guides.");
+        ImGui::EndDisabled();
 
         bool afterRR = config->DlssNrApplyAfterRR.value_or_default();
         if (ImGui::Checkbox("Apply after Ray Reconstruction (DX12)", &afterRR))

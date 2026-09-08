@@ -320,6 +320,10 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrEnabled.set_from_config(readBool("DlssNr", "Enabled"));
             DlssNrRunBeforeSr.set_from_config(readBool("DlssNr", "RunBeforeSR"));
             DlssNrDeferredDlss.set_from_config(readBool("DlssNr", "DeferredDLSS"));
+            DlssNrResidualFg.set_from_config(readBool("DlssNr", "ResidualFG"));
+            DlssNrPrecision.set_from_config(readUInt("DlssNr", "Precision"));
+            if (DlssNrPrecision.value_or_default() != 2) DlssNrPrecision = 0u;
+            DlssNrResidualFgApproxCamera.set_from_config(readBool("DlssNr", "ResidualFGApproxCamera"));
             DlssNrApplyAfterRR.set_from_config(readBool("DlssNr", "ApplyAfterRR"));
             DlssNrRRPasses.set_from_config(readUInt("DlssNr", "RRPasses"));
             DlssNrRRWorkingScale.set_from_config(readFloat("DlssNr", "RRWorkingScale"));
@@ -1230,6 +1234,9 @@ bool Config::SaveIni()
                  GetBoolValue(Instance()->DlssNrRunBeforeSr.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DeferredDLSS",
                  GetBoolValue(Instance()->DlssNrDeferredDlss.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "ResidualFG", GetBoolValue(Instance()->DlssNrResidualFg.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "Precision", GetIntValue(Instance()->DlssNrPrecision.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "ResidualFGApproxCamera", GetBoolValue(Instance()->DlssNrResidualFgApproxCamera.value_for_config()).c_str());
     ini.SetValue("DlssNr", "ApplyAfterRR",
                  GetBoolValue(Instance()->DlssNrApplyAfterRR.value_for_config()).c_str());
     ini.SetValue("DlssNr", "RRPasses",

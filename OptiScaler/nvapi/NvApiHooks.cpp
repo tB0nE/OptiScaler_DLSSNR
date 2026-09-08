@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "NvApiHooks.h"
+#include <dlssnr/DlssNrNative.h>
 #include <NvApiDriverSettings.h>
 
 #include "State.h"
@@ -193,7 +194,7 @@ void* __stdcall NvApiHooks::hkNvAPI_QueryInterface(unsigned int InterfaceId)
     // presets belong to the external FG owner in this mode. Returning null for
     // a Reflex query would disable it, so forward to the real function table.
     if (State::Instance().externalFrameGeneration)
-        return o_NvAPI_QueryInterface ? o_NvAPI_QueryInterface(InterfaceId) : nullptr;
+        return DlssNrNative::WrapNvapi(InterfaceId,o_NvAPI_QueryInterface ? o_NvAPI_QueryInterface(InterfaceId) : nullptr);
 
     if (!o_NvAPI_QueryInterface)
         if (Config::Instance()->UseFakenvapi.value_or_default())
@@ -260,7 +261,7 @@ void* __stdcall NvApiHooks::hkNvAPI_QueryInterface(unsigned int InterfaceId)
 
     // LOG_DEBUG("counter: {} functionPointer: {:X}", qiCounter, (size_t)functionPointer);
 
-    return functionPointer;
+    return DlssNrNative::WrapNvapi(InterfaceId,functionPointer);
 }
 
 // Requires HMODULE to make sure nvapi is loaded before calling this function

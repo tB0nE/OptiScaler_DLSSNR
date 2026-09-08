@@ -111,5 +111,56 @@ int wmain(int argc, wchar_t** argv) try {
     settings.Mode=DlssNrMode_UnitExposure; result=run();
     expect(result[0].r==1 && result[1].r==1, "Private DLSS exposure is not fixed at one");
     std::puts("PASS: signed residual, shadow/brightening roundtrip, neutral identity, alpha, overshoot, unit exposure");
+    const std::array<Pixel,2> currentMotion {{{1,0,0,1}, {INFINITY,0,0,1}}};
+    ctx->UpdateSubresource(original.Get(),0,nullptr,currentMotion.data(),sizeof(currentMotion),0);
+    settings.Mode=DlssNrMode_NormalizeMotion; settings.MvScaleX=0.5f; settings.MvScaleY=1;
+    result=run();
+    expect(result[0].r==0.5f && result[0].a==1 && result[1].r==65504 && result[1].a==0,
+           "Motion normalization / invalid sentinel failed");
+    const std::array<Pixel,2> normalized {{{0.5f,0,0,1}, {0.5f,0,0,1}}};
+    const std::array<Pixel,2> previousMotion {{{0.2f,0,0,1}, {0.1f,0,0,1}}};
+    ctx->UpdateSubresource(original.Get(),0,nullptr,normalized.data(),sizeof(normalized),0);
+    ctx->UpdateSubresource(model.Get(),0,nullptr,previousMotion.data(),sizeof(previousMotion),0);
+    settings.Mode=DlssNrMode_ComposeMotion; result=run();
+    expect(std::abs(result[0].r-0.6f)<0.0001f && result[0].a==1,
+           "Two-frame motion did not sample the previous field at the displaced position");
+    expect(result[1].r==65504 && result[1].a==0, "Offscreen history was silently clamped");
+    std::puts("PASS: motion normalization, displaced two-frame composition, invalid and offscreen history");
+    ctx->UpdateSubresource(original.Get(),0,nullptr,carrierBase.data(),sizeof(carrierBase),0);
+    ctx->UpdateSubresource(model.Get(),0,nullptr,carrier.data(),sizeof(carrier),0);
+    settings.Mode=DlssNrMode_ApplyInterpolatedResidual; settings.ExposurePreMul=2;
+    D3D11_TEXTURE2D_DESC flagDesc {}; flagDesc.Width=flagDesc.Height=flagDesc.MipLevels=flagDesc.ArraySize=1;
+    flagDesc.Format=DXGI_FORMAT_R8_UNORM; flagDesc.SampleDesc.Count=1;
+    flagDesc.BindFlags=D3D11_BIND_SHADER_RESOURCE;
+    unsigned char flag=1; D3D11_SUBRESOURCE_DATA flagData {&flag,1,0};
+    ComPtr<ID3D11Texture2D> flagTexture; ComPtr<ID3D11ShaderResourceView> flagSrv;
+    check(device->CreateTexture2D(&flagDesc,&flagData,&flagTexture));
+    check(device->CreateShaderResourceView(flagTexture.Get(),nullptr,&flagSrv));
+    ctx->CSSetShaderResources(4,1,flagSrv.GetAddressOf());
+    result=run(); expect(same(result[0],carrierBase[0]) && same(result[1],carrierBase[1]),
+                         "FG suppression did not preserve matching clean frame");
+    flag=0; ctx->UpdateSubresource(flagTexture.Get(),0,nullptr,&flag,1,0);
+    result=run(); expect(same(result[0],carrierEdit[0]) && same(result[1],carrierEdit[1]),
+                         "Allowed FG residual was not composed");
+    std::puts("PASS: rejected FG output preserves the clean frame");
+    DlssNrResidualHold hold;
+    expect(!hold.CanReuse(0), "Uninitialized hold was reused");
+    hold.SampleSucceeded(0);
+    expect(!hold.CanReuse(0) && hold.CanReuse(1) && !hold.CanReuse(2), "Hold exceeded two-frame cadence");
+    hold.Reset(); expect(!hold.CanReuse(1), "Cut/failure did not invalidate held residual");
+    hold.SampleSucceeded(5); expect(!hold.CanReuse(7), "Frame gap reused stale residual");
+    auto nextBase=carrierBase, nextExpected=carrierEdit;
+    for (unsigned i=0;i<2;++i) {
+        nextBase[i].r+=0.3f; nextBase[i].g+=0.3f; nextBase[i].b+=0.3f;
+        nextExpected[i].r+=0.3f; nextExpected[i].g+=0.3f; nextExpected[i].b+=0.3f;
+    }
+    ctx->UpdateSubresource(original.Get(),0,nullptr,nextBase.data(),sizeof(nextBase),0);
+    settings.Mode=DlssNrMode_ApplyResidual; result=run();
+    expect(same(result[0],nextExpected[0]) && same(result[1],nextExpected[1]),
+           "Held residual froze the raster instead of editing the next current frame");
+    settings.Mode=DlssNrMode_ZeroMotion; result=run();
+    expect(result[0].r==0 && result[0].g==0 && result[1].r==0 && result[1].g==0,
+           "Private reset-only motion guide was not zero");
+    std::puts("PASS: two-frame hold cadence, cut/gap invalidation, current-raster composition, zero guide");
     return 0;
 } catch (const std::exception& e) { std::fprintf(stderr,"FAIL: %s\n",e.what()); return 1; }

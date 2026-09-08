@@ -509,9 +509,14 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         gTarget[id.xy] = float4(0.5 + 0.5 * d / (1.0 + abs(d)), 1.0);
         return;
     }
-    if (gMode == 6)
+    if (gMode == 6 || gMode == 10)
     {
         float4 base = gSource.Load(int3(id.xy, 0));
+        if (gMode == 10 && gExposure.Load(int3(0, 0, 0)).r > 0.0)
+        {
+            gTarget[id.xy] = base;
+            return;
+        }
         float3 encoded = SanitizeFinite3(gModel.Load(int3(id.xy, 0)).rgb, 0.5);
         // Limit the inverse near its poles: DLSS can ring outside the carrier's [0,1] range.
         float3 signedEdit = clamp(2.0 * encoded - 1.0, -0.999, 0.999);
@@ -522,6 +527,32 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     if (gMode == 7)
     {
         gTarget[id.xy] = 1.0;
+        return;
+    }
+    if (gMode == 11)
+    {
+        gTarget[id.xy] = 0;
+        return;
+    }
+    if (gMode == 8)
+    {
+        // The caller supplies raw-vector -> normalized active-image scale.
+        // Alpha is explicit validity for composition; 65504 is the FG invalid sentinel.
+        float2 motion = gSource.Load(int3(id.xy, 0)).xy * float2(gMvScaleX, gMvScaleY);
+        bool valid = all(isfinite(motion)) && all(abs(motion) < 2.0);
+        gTarget[id.xy] = valid ? float4(motion, 0, 1) : float4(65504, 65504, 0, 0);
+        return;
+    }
+    if (gMode == 9)
+    {
+        float4 current = gSource.Load(int3(id.xy, 0));
+        float2 previousUV = uv + current.xy;
+        bool valid = current.a > 0.999 && all(isfinite(current.xy)) &&
+                     all(previousUV >= 0.0) && all(previousUV <= 1.0);
+        float4 previous = valid ? gModel.SampleLevel(gLinear, previousUV, 0) : 0;
+        float2 combined = current.xy + previous.xy;
+        valid = valid && previous.a > 0.999 && all(isfinite(combined)) && all(abs(combined) < 2.0);
+        gTarget[id.xy] = valid ? float4(combined, 0, 1) : float4(65504, 65504, 0, 0);
         return;
     }
 

@@ -19,6 +19,12 @@ The upstream fork already provided experimental direct access to NVIDIA DLSS Neu
   `RRPasses` defaults to 1 and `RRWorkingScale` to 0.5 of RR's output dimensions. RR keeps its
   original noisy inputs, and NR history is rebuilt when switching between SR and RR.
 - **Verified BG3 path.** Baldur's Gate 3 was tested through the `bg3_dx11.exe` D3D11-to-D3D12 bridge with two neural passes at 1920x1080 followed by DLSS Super Resolution to 3840x2160.
+- **Experimental half-rate residual FG (source preview).** Optional every-other-frame NR,
+  with NVIDIA FG interpolating its DLSS-upscaled contribution. Adds a one-frame SR delay;
+  later game effects can be misaligned and camera guides currently require an explicit
+  approximation opt-in. See [controls, requirements and limitations](docs/RESIDUAL-FG-PROTOTYPE.md).
+  This is not included in the v0.6.2 download below.
+- **attempt at NVFP4 hybrid.** VERY minor improvements on Blackwell.
 
 Downloads:
 

@@ -3,6 +3,9 @@
 #include <set>
 
 #include <dlssnr/DlssNr.h>
+#include <dlssnr/DlssNrNative.h>
+#include <dlssnr/ResidualFg.h>
+#include <DirectXMath.h>
 
 
 #include <dlssnr/DlssNr_Capture.h>
@@ -192,6 +195,8 @@ struct NrState
     const int* lastRatioStage = nullptr;
     int* lastInit = nullptr;
     int* lastCreate = nullptr;
+    const char* (*lastModelError)() = nullptr;
+    std::string modelError;
 
     NVSDK_NGX_Parameter* capabilityParams = nullptr;
     void* feature = nullptr;
@@ -475,6 +480,19 @@ float WhitePointForMean(float meanLuma)
 
 std::filesystem::path g_dllDir;
 
+const char* SelectedModelFile()
+{
+    return "nvngx_dlssnr.dll";
+}
+
+std::optional<std::filesystem::path> FindSelectedModel()
+{
+    auto path = Util::FindFilePath(g_dllDir, SelectedModelFile());
+    if (!path.has_value())
+        path = Util::FindFilePath(Util::ExePath().remove_filename(), SelectedModelFile());
+    return path;
+}
+
 // Loads the forwarder that owns the calls into the snippet.
 bool EnsureForwarder()
 {
@@ -524,6 +542,7 @@ bool EnsureForwarder()
     g_nr.probeFloat = (PFN_NrProbeFloat) GetProcAddress(g_nr.forwarder, "dlssnr_call_probe_float");
     g_nr.lastInit = (int*) GetProcAddress(g_nr.forwarder, "dlssnr_call_last_init");
     g_nr.lastCreate = (int*) GetProcAddress(g_nr.forwarder, "dlssnr_call_last_create");
+    g_nr.lastModelError = (const char*(*)()) GetProcAddress(g_nr.forwarder, "dlssnr_call_error");
 
     if (g_nr.create == nullptr || g_nr.evaluate == nullptr)
     {
@@ -1607,6 +1626,8 @@ DlssNr_Dx12::~DlssNr_Dx12()
     }
 }
 
+
+
 void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* colour,
                            ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* output,
                            const DlssNrFrameInfo& frame, ID3D12CommandQueue* timingQueue)
@@ -1629,7 +1650,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // the game's state, or returns with those bindings still active.
     const bool restoreRequired = cfg.RestoreComputeSignature.value_or_default() ||
                                  cfg.RestoreGraphicSignature.value_or_default();
-    if (restoreRequired && !D3D12Hooks::CanRestoreRootSignature(cmdList))
+    if (restoreRequired && !frame.IndependentCommands && !D3D12Hooks::CanRestoreRootSignature(cmdList))
     {
         ReportSkipOnce("the upscaler could not restore state this frame");
         return;
@@ -1953,10 +1974,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     if (g_nr.feature == nullptr && g_nr.output != nullptr && g_nr.colorCopy != nullptr &&
         g_nr.hdrCopy != nullptr)
     {
-        auto snippet = Util::FindFilePath(g_dllDir, "nvngx_dlssnr.dll");
-
-        if (!snippet.has_value())
-            snippet = Util::FindFilePath(Util::ExePath().remove_filename(), "nvngx_dlssnr.dll");
+        auto snippet = FindSelectedModel();
 
         if (!snippet.has_value())
         {
@@ -1985,6 +2003,11 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             g_nr.featurePendingSubmission = false;
             g_nr.failed = true;
             g_nr.reason = "the model would not initialise";
+            if (g_nr.lastModelError && *g_nr.lastModelError())
+            {
+                g_nr.modelError = g_nr.lastModelError();
+                g_nr.reason = g_nr.modelError.c_str();
+            }
             const auto initResult = (unsigned int) (g_nr.lastInit != nullptr ? *g_nr.lastInit : 0);
             const auto createResult = (unsigned int) (g_nr.lastCreate != nullptr ? *g_nr.lastCreate : 0);
 
@@ -2004,6 +2027,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         g_nr.featurePendingSubmission = true;
         g_nr.featureCreateEpoch = frame.SubmissionEpoch;
         RecordBuiltPrimaryTuning(cfg);
+        LOG_INFO("DLSS-NR model feature created from {}", snippet->string());
         LOG_INFO("DLSS-NR running {}: target {}x{}, model {}x{}, guides {}x{} "
                  "(preset {}, intensity {}, style {}, build epoch {})",
                  frame.AfterRayReconstruction ? "after Ray Reconstruction" :
@@ -2087,15 +2111,13 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             if (g_nr.passCreateFailed[pass])
                 break;
 
-            auto snippet = Util::FindFilePath(g_dllDir, "nvngx_dlssnr.dll");
-            if (!snippet.has_value())
-                snippet = Util::FindFilePath(Util::ExePath().remove_filename(), "nvngx_dlssnr.dll");
+            auto snippet = FindSelectedModel();
 
             if (!snippet.has_value())
             {
                 g_nr.passCreateFailed[pass] = true;
-                LOG_ERROR("DLSS-NR: pass {} feature not built because nvngx_dlssnr.dll disappeared",
-                          pass + 1);
+                LOG_ERROR("DLSS-NR: pass {} feature not built because {} disappeared",
+                          pass + 1, SelectedModelFile());
             }
             else
             {
@@ -2852,6 +2874,11 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     {
         g_nr.failed = true;
         g_nr.reason = "the model refused to run";
+        if (g_nr.lastModelError && *g_nr.lastModelError())
+        {
+            g_nr.modelError = g_nr.lastModelError();
+            g_nr.reason = g_nr.modelError.c_str();
+        }
         LOG_ERROR("DLSS-NR evaluate returned 0x{:X} ({}), disabling for this session", (uint32_t) result,
                   NgxResultName((unsigned int) result));
     }
@@ -2937,6 +2964,8 @@ namespace DlssNr
 {
 #include "DlssNr_DeferredSr.inl"
 
+std::string DeferredDlssStatus() { return SynchronousDeferredDlssStatus(); }
+
 void RetryAfterFailure()
 {
     g_nr.failed = false;
@@ -2956,9 +2985,15 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
 {
     std::lock_guard<std::recursive_mutex> nrLock(g_nrMutex);
     const Config& cfg = *Config::Instance();
-
-    // The deferred route owns both seams. Never fall through to in-place NR if it is waiting,
-    // unsupported, or failed: that would contaminate the clean SR input used by this experiment.
+    static unsigned lastPrecision=0;
+    const unsigned precision=cfg.DlssNrPrecision.value_or_default();
+    if(lastPrecision!=precision)
+    {
+        RetryAfterFailure();
+        DeferredSr::Cancel();
+        lastPrecision = precision;
+    }
+    DlssNrNative::SetEnabled(precision == 2);
     if (!cfg.DlssNrEnabled.value_or_default() || !cfg.DlssNrDeferredDlss.value_or_default() || forcePost)
         DeferredSr::Cancel();
     else

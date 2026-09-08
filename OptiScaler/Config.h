@@ -263,6 +263,9 @@ class Config
     // Generate NR before SR, upscale its signed contribution with a private DLSS feature,
     // and apply it after the game's upscaler. Takes precedence over RunBeforeSR; opt-in.
     CustomOptional<bool> DlssNrDeferredDlss { false };
+    CustomOptional<bool> DlssNrResidualFg { false };
+    CustomOptional<uint32_t> DlssNrPrecision { 0 }; // 0 original FP8, 2 NVFP4 hybrid
+    CustomOptional<bool> DlssNrResidualFgApproxCamera { false };
     CustomOptional<bool> DlssNrApplyAfterRR { false };
     CustomOptional<unsigned int> DlssNrRRPasses { 1 };
     CustomOptional<float> DlssNrRRWorkingScale { 0.5f };
