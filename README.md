@@ -30,11 +30,15 @@ Downloads:
 
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 - [Padded-input fix preview — v0.6.1](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.6.1-padded-presr) — complete package with the padded pre-SR fix, earlier skin/MFG compatibility changes and the verified FG downloader. Build/GPU-copy tested; Dawnwalker validation is pending. NVIDIA NR/FG runtimes are not bundled.
 =======
 - [Latest release - v0.7.3](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.7.3-kcd2) - KCD2 presentation fixes, corrected NR motion-vector metadata, two model options, and the Streamline 2.14.1 downloader. See [KCD2 setup](docs/DLSS-FRAME-GENERATION.md#kingdom-come-deliverance-ii).
 =======
 - [Latest release - v0.7.4](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.7.4-unified-nr) - unified NR controls for SR and RR, plus shorter menu descriptions. NR before RR is experimental.
+=======
+- [Latest release - v0.7.5](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.7.5-nr-fixes) - DXVK/Proton NR startup fix, deferred NR flashing fix, and clearer control tooltips. Retains unified SR/RR controls; NR before RR remains experimental.
+>>>>>>> 73f26daa (Document v0.7.5 NR fixes release)
 
 - [Previous release - v0.7.3](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.7.3-kcd2) - KCD2 presentation fixes, corrected NR motion-vector metadata, two model options, and the Streamline 2.14.1 downloader. See [KCD2 setup](docs/DLSS-FRAME-GENERATION.md#kingdom-come-deliverance-ii).
 >>>>>>> b7484ef9 (Unify NR controls for SR and RR and simplify menu descriptions)
