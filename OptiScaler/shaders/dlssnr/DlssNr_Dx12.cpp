@@ -3030,7 +3030,7 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
         DeferredSr::Cancel();
         lastPrecision = precision;
     }
-    DlssNrNative::SetEnabled(precision == 2);
+    DlssNrNative::SetPrecision(precision);
     if (!cfg.DlssNrEnabled.value_or_default() || !cfg.DlssNrDeferredDlss.value_or_default() || forcePost)
         DeferredSr::Cancel();
     else

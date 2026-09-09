@@ -24,7 +24,7 @@ The upstream fork already provided experimental direct access to NVIDIA DLSS Neu
   later game effects can be misaligned and camera guides currently require an explicit
   approximation opt-in. See [controls, requirements and limitations](docs/RESIDUAL-FG-PROTOTYPE.md).
   This is not included in the v0.6.2 download below.
-- **attempt at NVFP4 hybrid.** VERY minor improvements on Blackwell.
+- **Recommended NVFP4 hybrid.** Promoted combined path for Blackwell; previous hybrid remains selectable. One BG3 120-second run per model (first 20 seconds discarded) measured 55.16 rendered FPS recommended, 54.91 previous hybrid, and 54.57 FP8. These small differences need repeated runs to establish a reliable gain.
 
 Downloads:
 
