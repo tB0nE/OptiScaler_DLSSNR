@@ -24,11 +24,20 @@ The upstream fork already provided experimental direct access to NVIDIA DLSS Neu
   later game effects can be misaligned and camera guides currently require an explicit
   approximation opt-in. See [controls, requirements and limitations](docs/RESIDUAL-FG-PROTOTYPE.md).
   This is not included in the v0.6.2 download below.
-- **Recommended NVFP4 hybrid.** Promoted combined path for Blackwell; previous hybrid remains selectable. One BG3 120-second run per model (first 20 seconds discarded) measured 55.16 rendered FPS recommended, 54.91 previous hybrid, and 54.57 FP8. These small differences need repeated runs to establish a reliable gain.
+- **Two model options: NVIDIA (FP8) and Experimental (FP8+NVFP4 hybrid).** NVIDIA uses original FP8 and is the default. Experimental uses the promoted NVFP4 hybrid on Blackwell. The previous hybrid option has been removed; old Precision=2 configurations fall back to NVIDIA.
 
 Downloads:
 
+<<<<<<< HEAD
 - [Padded-input fix preview — v0.6.1](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.6.1-padded-presr) — complete package with the padded pre-SR fix, earlier skin/MFG compatibility changes and the verified FG downloader. Build/GPU-copy tested; Dawnwalker validation is pending. NVIDIA NR/FG runtimes are not bundled.
+=======
+- [Latest release - v0.7.3](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.7.3-kcd2) - KCD2 presentation fixes, corrected NR motion-vector metadata, two model options, and the Streamline 2.14.1 downloader. See [KCD2 setup](docs/DLSS-FRAME-GENERATION.md#kingdom-come-deliverance-ii).
+
+- [FP8 / NVFP4 hybrid update � v0.7.1](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.7.1-hybrid) � attempt at NVFP4 hybrid. VERY minor improvements on Blackwell. Removes async NR and fixes Streamline override startup crashes.
+
+- [Earlier experimental package — v0.7.0 Vulkan/NR preview](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.7.0-vulkan-preview) — complete rebuilt package with native Vulkan pre-SR/multipass, selected compatibility fixes, and optional D3D12 residual experiments. New options are off by default. Read the [scope and validation limits](docs/VULKAN-PARITY-REVIEW.md).
+- [Previous release / rollback — v0.6.2](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.6.2-swapchain-fixes) — rebuilt complete package including janblade's window-sized swapchain fix and the reviewed DirectComposition hook, plus the previous padded pre-SR and skin/MFG changes. Build and native API smoke-tested; in-game validation of the new hooks is pending. NVIDIA NR/FG runtimes are not bundled.
+>>>>>>> cb1f7aa3 (Release v0.7.3 with KCD2 pacing and NR motion-vector fixes)
 - [Per-pass controls preview](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.5.0-pass-controls-preview) — reorganized pass sections and independent model strengths, including the RR controls. Runtime validation is pending.
 - [Native RR controls preview](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.4.0-rr-preview) — compiled experimental build with independent NR-after-RR controls. In-game RR/NR validation is pending.
 - [Portable cross-generation package](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.3.0-crossgen-portable) — the complete installer and backend layout, with game-neutral defaults and RTX 20/30/40/50 runtime guidance.
@@ -42,8 +51,8 @@ NVIDIA's proprietary `nvngx_dlssnr.dll` is required but is **not redistributed**
 The DLSS runtime has separate redistribution conditions; the Streamline source licence does not
 cover the whole DLL set. See the [licence review and official sources](docs/DLSS-FRAME-GENERATION.md#licences-and-distribution).
 
-Get the files from NVIDIA's [Streamline 2.12.0 release](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.12.0)
-([official SDK ZIP](https://github.com/NVIDIA-RTX/Streamline/releases/download/v2.12.0/streamline-sdk-v2.12.0.zip)).
+Get the files from NVIDIA's [Streamline 2.14.1 release](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.1)
+([official SDK ZIP](https://github.com/NVIDIA-RTX/Streamline/releases/download/v2.14.1/streamline-sdk-v2.14.1.zip)).
 Our helper downloads that exact ZIP and verifies its checksum, all six DLL hashes and NVIDIA signatures.
 
 1. Install a complete OptiScaler release first. The v0.6.1 preview includes this helper; v0.5 and earlier do not.

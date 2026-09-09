@@ -139,11 +139,11 @@ NvAPI_Status __cdecl DestroyFunction(ID3D12Device*d,NVDX_ObjectHandle f){auto&s=
 NvAPI_Status __cdecl DestroyModule(ID3D12Device*d,NVDX_ObjectHandle m){auto&s=S();std::lock_guard<std::recursive_mutex>g(s.mutex);s.modules.erase(m);for(auto i=s.targets.begin();i!=s.targets.end();)if(i->second.module==m)i=s.targets.erase(i);else++i;return s.destroyModule(d,m);}
 }
 void*WrapNvapi(unsigned id,void*raw){if(!raw)return raw;auto&s=S();std::lock_guard<std::recursive_mutex>apiGuard(s.mutex);switch(id){case 0xad1a677d:s.createModule=(decltype(s.createModule))raw;return(void*)&CreateModule;case 0xe2436e22:s.createFunction=(decltype(s.createFunction))raw;return(void*)&CreateFunction;case 0x24973538:s.launch=(decltype(s.launch))raw;return(void*)&Launch;case 0x41c65285:s.destroyModule=(decltype(s.destroyModule))raw;return(void*)&DestroyModule;case 0xdf295ea6:s.destroyFunction=(decltype(s.destroyFunction))raw;return(void*)&DestroyFunction;default:return raw;}}
-void SetPrecision(unsigned precision){auto&s=S();std::lock_guard<std::recursive_mutex>g(s.mutex);const bool on=precision==2||precision==4,candidate=precision==4;
+void SetPrecision(unsigned precision){auto&s=S();std::lock_guard<std::recursive_mutex>g(s.mutex);const bool on=precision==4,candidate=on;
  if(s.restartRequired){s.status="Restart required: hybrid recording failed; precision change was not applied";return;}if(s.enabled==on&&s.candidate==candidate)return;
  for(auto&p:s.sessions)if(p.second.pending){s.restartRequired=true;s.status="Restart required: hybrid pair still pending; precision change was not applied";return;}
  s.enabled=on;s.candidate=candidate;s.status=candidate?"Candidate hybrid selected; waiting for original model":on?"Hybrid FFN selected; waiting for supported original model":"Original FP8 selected";
 }
-void SetEnabled(bool on){SetPrecision(on?2u:0u);}
+void SetEnabled(bool on){SetPrecision(on?4u:0u);}
 std::string Status(){auto&s=S();std::lock_guard<std::recursive_mutex>g(s.mutex);return s.status+" | rewritten original launches: "+std::to_string(s.launches)+" | candidate split contractions: "+std::to_string(s.splitLaunches);}
 }

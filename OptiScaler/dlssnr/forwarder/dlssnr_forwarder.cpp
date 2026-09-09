@@ -691,10 +691,13 @@ __declspec(dllexport) void *dlssnr_vk_create(void *cmdBuffer, void *capabilityPa
 //
 // Filling it here rather than in the host keeps the two APIs from drifting: a parameter added to one
 // evaluate and forgotten in the other would be a bug that only appears on one backend.
-__declspec(dllexport) int dlssnr_vk_evaluate(void *cmdBuffer, void *feature, void *capabilityParams,
+__declspec(dllexport) int dlssnr_vk_evaluate_v2(void *cmdBuffer, void *feature, void *capabilityParams,
                                              void *color, void *depth, void *motion, void *output,
                                              unsigned int width, unsigned int height,
                                              unsigned int guideWidth, unsigned int guideHeight,
+                                             unsigned int motionWidth, unsigned int motionHeight,
+                                             unsigned int depthBaseX, unsigned int depthBaseY,
+                                             unsigned int motionBaseX, unsigned int motionBaseY,
                                              int depthInverted, int reset, float intensity, int style,
                                              float localStructure, float localTone, float skinStructure,
                                              int useAutoMask, float mvScaleX, float mvScaleY) {
@@ -723,14 +726,14 @@ __declspec(dllexport) int dlssnr_vk_evaluate(void *cmdBuffer, void *feature, voi
     setUInt(capabilityParams, "DLSSNR.OutputSubrectBaseY", 0);
     setUInt(capabilityParams, "DLSSNR.OutputSubrectWidth", width);
     setUInt(capabilityParams, "DLSSNR.OutputSubrectHeight", height);
-    setUInt(capabilityParams, "DLSSNR.DepthSubrectBaseX", 0);
-    setUInt(capabilityParams, "DLSSNR.DepthSubrectBaseY", 0);
+    setUInt(capabilityParams, "DLSSNR.DepthSubrectBaseX", depthBaseX);
+    setUInt(capabilityParams, "DLSSNR.DepthSubrectBaseY", depthBaseY);
     setUInt(capabilityParams, "DLSSNR.DepthSubrectWidth", guideWidth);
     setUInt(capabilityParams, "DLSSNR.DepthSubrectHeight", guideHeight);
-    setUInt(capabilityParams, "DLSSNR.MVecSubrectBaseX", 0);
-    setUInt(capabilityParams, "DLSSNR.MVecSubrectBaseY", 0);
-    setUInt(capabilityParams, "DLSSNR.MVecSubrectWidth", guideWidth);
-    setUInt(capabilityParams, "DLSSNR.MVecSubrectHeight", guideHeight);
+    setUInt(capabilityParams, "DLSSNR.MVecSubrectBaseX", motionBaseX);
+    setUInt(capabilityParams, "DLSSNR.MVecSubrectBaseY", motionBaseY);
+    setUInt(capabilityParams, "DLSSNR.MVecSubrectWidth", motionWidth);
+    setUInt(capabilityParams, "DLSSNR.MVecSubrectHeight", motionHeight);
 
     // The game's own encoding, passed through rather than derived. Deriving it from the resolutions
     // came out as exactly 1.0 at native, which told the model almost nothing had moved.
@@ -815,12 +818,15 @@ __declspec(dllexport) void *dlssnr_call_create(const wchar_t *snippetPath, const
 
 // Colour and output are display resolution; depth and motion come from the game's own DLSS evaluation and
 // may be render resolution, so each resource carries its own subrect and motion scales by the ratio.
-__declspec(dllexport) int dlssnr_call_evaluate(ID3D12GraphicsCommandList *cmd, void *feature,
+__declspec(dllexport) int dlssnr_call_evaluate_v2(ID3D12GraphicsCommandList *cmd, void *feature,
                                                void *capabilityParams, ID3D12Resource *color,
                                                ID3D12Resource *depth, ID3D12Resource *motion,
                                                ID3D12Resource *output, unsigned int width,
                                                unsigned int height, unsigned int guideWidth,
-                                               unsigned int guideHeight, int depthInverted, int reset,
+                                               unsigned int guideHeight, unsigned int motionWidth,
+                                               unsigned int motionHeight, unsigned int depthBaseX,
+                                               unsigned int depthBaseY, unsigned int motionBaseX,
+                                               unsigned int motionBaseY, int depthInverted, int reset,
                                                float intensity, int style, float localStructure,
                                                float localTone, float skinStructure, int useAutoMask,
                                                float mvScaleX, float mvScaleY) {
@@ -852,14 +858,14 @@ __declspec(dllexport) int dlssnr_call_evaluate(ID3D12GraphicsCommandList *cmd, v
     setUInt(capabilityParams, "DLSSNR.OutputSubrectBaseY", 0);
     setUInt(capabilityParams, "DLSSNR.OutputSubrectWidth", width);
     setUInt(capabilityParams, "DLSSNR.OutputSubrectHeight", height);
-    setUInt(capabilityParams, "DLSSNR.DepthSubrectBaseX", 0);
-    setUInt(capabilityParams, "DLSSNR.DepthSubrectBaseY", 0);
+    setUInt(capabilityParams, "DLSSNR.DepthSubrectBaseX", depthBaseX);
+    setUInt(capabilityParams, "DLSSNR.DepthSubrectBaseY", depthBaseY);
     setUInt(capabilityParams, "DLSSNR.DepthSubrectWidth", guideWidth);
     setUInt(capabilityParams, "DLSSNR.DepthSubrectHeight", guideHeight);
-    setUInt(capabilityParams, "DLSSNR.MVecSubrectBaseX", 0);
-    setUInt(capabilityParams, "DLSSNR.MVecSubrectBaseY", 0);
-    setUInt(capabilityParams, "DLSSNR.MVecSubrectWidth", guideWidth);
-    setUInt(capabilityParams, "DLSSNR.MVecSubrectHeight", guideHeight);
+    setUInt(capabilityParams, "DLSSNR.MVecSubrectBaseX", motionBaseX);
+    setUInt(capabilityParams, "DLSSNR.MVecSubrectBaseY", motionBaseY);
+    setUInt(capabilityParams, "DLSSNR.MVecSubrectWidth", motionWidth);
+    setUInt(capabilityParams, "DLSSNR.MVecSubrectHeight", motionHeight);
 
     // The game's own encoding, passed through. Deriving this from the resolutions was a guess, and at
     // native resolution it came out as exactly 1.0 -- so a game using normalised vectors was telling

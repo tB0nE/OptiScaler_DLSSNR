@@ -322,7 +322,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrDeferredDlss.set_from_config(readBool("DlssNr", "DeferredDLSS"));
             DlssNrResidualFg.set_from_config(readBool("DlssNr", "ResidualFG"));
             DlssNrPrecision.set_from_config(readUInt("DlssNr", "Precision"));
-            if (DlssNrPrecision.value_or_default() != 2 && DlssNrPrecision.value_or_default() != 4) DlssNrPrecision = 0u;
+            if (DlssNrPrecision.value_or_default() != 4) DlssNrPrecision = 0u;
             DlssNrResidualFgApproxCamera.set_from_config(readBool("DlssNr", "ResidualFGApproxCamera"));
             DlssNrApplyAfterRR.set_from_config(readBool("DlssNr", "ApplyAfterRR"));
             DlssNrRRPasses.set_from_config(readUInt("DlssNr", "RRPasses"));

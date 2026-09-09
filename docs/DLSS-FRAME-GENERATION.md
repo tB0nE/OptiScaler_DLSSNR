@@ -4,10 +4,9 @@ This supplies the DLLs for **OptiScaler's own DLSS FG output**, not a new frame-
 implementation. It does not enable FG, unlock RTX 40 MFG, add native FG support to a game, or
 replace the game's existing DLLs. The injected upscaler-to-FG route is experimental.
 
-The pinned source is NVIDIA's [Streamline SDK 2.12.0 release](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.12.0).
-Only its production `bin/x64` files are used: Streamline 2.12.0.0 and `nvngx_dlssg.dll` 310.7.0.0.
-This is a reproducible public SDK set, not the newer 2.13/310.8 files used in earlier local tests.
-Those earlier tests therefore do **not** validate this particular bundle in a game.
+The pinned source is NVIDIA's [Streamline SDK 2.14.1 release](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.1).
+Only its production `bin/x64` files are used: Streamline 2.14.1.0 and `nvngx_dlssg.dll` 310.9.1.0.
+This production set was tested in KCD2 with DLSS Quality, Neural Rendering and DLSS FG in SDR.
 
 The [manifest](../redist/streamline/manifest.json) pins the official ZIP checksum, each extracted
 file's checksum, and the NVIDIA signing certificates. No DLL is patched or downloaded from a mirror.
@@ -29,9 +28,9 @@ DLL-containing FG archive are uploaded**. The local bundle from development is n
    .\get_streamline.ps1 -Destination 'D:\Path\To\Game\OptiScaler\streamline' -AcceptNvidiaLicenses
    ```
 
-   No administrator rights or antivirus exclusions are needed. The first download is about 232 MB;
+   No administrator rights or antivirus exclusions are needed. The first download is about 276 MB;
    only about 10 MB of runtime DLLs plus licence notices are installed. The SDK remains cached in
-   `.dependencies/streamline/2.12.0` beside the script. `-ArchivePath C:\Downloads\streamline-sdk-v2.12.0.zip`
+   `.dependencies/streamline/2.14.1` beside the script. `-ArchivePath C:\Downloads\streamline-sdk-v2.14.1.zip`
    can use a previously downloaded official ZIP; the same checksum checks still apply.
 4. The script refuses a different existing stack or unexpected files in the destination. Do not
    mix DLL versions or move them up beside the game's executable. Keep a known-working stack unless
@@ -57,15 +56,15 @@ If you changed `[Libraries] OptiDllPath`, use its `streamline` subfolder instead
 ## Manual download without the helper
 
 1. Read the [NVIDIA licences](#licences-and-distribution), then download
-   [streamline-sdk-v2.12.0.zip directly from NVIDIA](https://github.com/NVIDIA-RTX/Streamline/releases/download/v2.12.0/streamline-sdk-v2.12.0.zip).
+   [streamline-sdk-v2.14.1.zip directly from NVIDIA](https://github.com/NVIDIA-RTX/Streamline/releases/download/v2.14.1/streamline-sdk-v2.14.1.zip).
    Choose that release asset, **not** GitHub's "Source code (zip)"; the latter does not contain the DLLs.
 2. Check the SDK ZIP before extracting it:
 
    ```powershell
-   Get-FileHash -Algorithm SHA256 -LiteralPath 'C:\Downloads\streamline-sdk-v2.12.0.zip'
+   Get-FileHash -Algorithm SHA256 -LiteralPath 'C:\Downloads\streamline-sdk-v2.14.1.zip'
    ```
 
-   Expected SHA-256: `F5C0A3D870707DDDC3570FB4BCD3655CF48A8A68C3A9D342910CFA21B77DCF48`.
+   Expected SHA-256: `92C4D954631A1710DA86CA3FA8D5034F2B9503838C95FC4AE977AE149319781B`.
 3. Extract the SDK to a separate folder. With the game closed and its setup backed up, copy only
    these six files from the SDK's **`bin/x64`** folder into the game's **`OptiScaler/streamline`**:
    `sl.interposer.dll`, `sl.common.dll`, `sl.dlss_g.dll`, `sl.reflex.dll`, `sl.pcl.dll`, `nvngx_dlssg.dll`.
@@ -126,13 +125,28 @@ The unmodified NVIDIA runtime supports ordinary DLSS FG on RTX 40/50 and MFG on 
 not itself unlock RTX 40 MFG or provide NVIDIA FG on RTX 20/30. Those are separate compatibility/
 replacement paths. A 5080 does not need the RTX 40 unlocker.
 Enable Windows Hardware-accelerated GPU scheduling and use a compatible NVIDIA driver.
-See NVIDIA's [DLSS FG integration guide](https://github.com/NVIDIA-RTX/Streamline/blob/v2.12.0/docs/ProgrammingGuideDLSS_G.md).
+See NVIDIA's [DLSS FG integration guide](https://github.com/NVIDIA-RTX/Streamline/blob/v2.14.1/docs/ProgrammingGuideDLSS_G.md).
 
 If FG fails, keep `OptiScaler.log` and any Streamline log, including the loaded DLL paths and
 reported FG support/error. An FPS counter alone is not proof of correct frame generation.
 HUD ghosting may require game-specific HUDFix settings; do not enable all experimental options at
 once. To revert, set `[FrameGen] Enabled=false`, `FGInput=nofg`, `FGOutput=nofg`, save and restart.
 Use single-player games without anti-cheat. Never disable antivirus to make a DLL load.
+
+## Kingdom Come: Deliverance II
+
+Use v0.7.3 or later and the pinned Streamline 2.14.1 files above. This fork declares
+application ownership of KCD2's frame-latency waitable object and keeps the local Streamline
+plugins from being replaced by the driver cache. NVIDIA's binaries are unmodified.
+
+- Load a save and select DLSS Quality; the video-based main menu is not a DLSS/NR test.
+- Use OptiFG (Upscaler) input and DLSSG output as described above.
+- Use SDR for this tested route. KCD2's FP16/scRGB HDR output is unsupported by this DLSSG path.
+- Keep the game focused when checking FG; Streamline disables interpolation out of focus.
+- To test uncapped FG, turn VSync off and reset OptiScaler's FPS Limit to 0 (unlimited).
+  The Reflex limit caps total output, including generated frames: a 150 FPS limit at 4x
+  can throttle rendering to about 37.5 FPS. Increasing the multiplier does not raise the cap.
+  Existing INI limits are preserved on upgrade; resetting the limit is a user setting, not a code fix.
 
 ## Local packaging only
 
@@ -157,9 +171,9 @@ to Git or relicensed under this repository's GPL. They are fetched directly from
 full-package option keeps the original notices beside the DLLs; doing so is not a determination that
 the combined package meets either NVIDIA's terms or the repository's GPL.
 
-Read the [Streamline licence](https://github.com/NVIDIA-RTX/Streamline/blob/v2.12.0/license.txt),
-[RTX SDK licence](https://github.com/NVIDIA-RTX/Streamline/blob/v2.12.0/external/ngx-sdk/license.txt)
-and [Reflex licence](https://github.com/NVIDIA-RTX/Streamline/blob/v2.12.0/external/reflex-sdk-vk/reflex.license.txt).
+Read the [Streamline licence](https://github.com/NVIDIA-RTX/Streamline/blob/v2.14.1/license.txt),
+[RTX SDK licence](https://github.com/NVIDIA-RTX/Streamline/blob/v2.14.1/external/ngx-sdk/license.txt)
+and [Reflex licence](https://github.com/NVIDIA-RTX/Streamline/blob/v2.14.1/external/reflex-sdk-vk/reflex.license.txt).
 The exact copies from the pinned ZIP accompany the extracted DLLs, along with third-party notices.
 Use of NVIDIA DLSS Frame Generation and NVIDIA Reflex remains subject to NVIDIA's terms.
 This project is not endorsed by NVIDIA.

@@ -74,7 +74,8 @@ if (-not (Test-Path $forwarder)) {
     Write-Host "forwarder: using the shared build output ($forwarder)"
 }
 
-$exports = @("dlssnr_call_create", "dlssnr_call_evaluate", "dlssnr_call_set_extras")
+$exports = @("dlssnr_call_create", "dlssnr_call_evaluate_v2", "dlssnr_call_set_extras",
+             "dlssnr_vk_probe", "dlssnr_vk_init", "dlssnr_vk_create", "dlssnr_vk_evaluate_v2", "dlssnr_vk_release")
 $bytes = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($forwarder))
 $missing = @($exports | Where-Object { $bytes.IndexOf($_) -lt 0 })
 

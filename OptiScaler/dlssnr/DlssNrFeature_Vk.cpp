@@ -8,6 +8,7 @@
 #include <NVNGX_Parameter.h>
 
 #include <shaders/dlssnr/DlssNr_Vk.h>
+#include <shaders/dlssnr/DlssNr_Guides.h>
 #include <shaders/output_scaling/OS_Vk.h>
 
 #include <algorithm>
@@ -30,6 +31,7 @@ using PFN_VkInit = int(__cdecl*)(const wchar_t*, const wchar_t*, void*, void*, v
 using PFN_VkCreate = void*(__cdecl*)(void*, void*, unsigned int, unsigned int, int, float, int, float, float, float,
                                      int, int);
 using PFN_VkEvaluate = int(__cdecl*)(void*, void*, void*, void*, void*, void*, void*, unsigned int, unsigned int,
+                                     unsigned int, unsigned int, unsigned int, unsigned int, unsigned int, unsigned int,
                                      unsigned int, unsigned int, int, int, float, int, float, float, float, int, float,
                                      float);
 using PFN_VkRelease = void(__cdecl*)(void*);
@@ -400,7 +402,7 @@ void TransitionForeign(VkCommandBuffer cmd, VkImage image, VkImageSubresourceRan
 bool LoadForwarder()
 {
     if (g_vk.forwarder != nullptr)
-        return g_vk.create != nullptr;
+        return g_vk.init != nullptr && g_vk.create != nullptr && g_vk.evaluate != nullptr;
 
     auto path = Util::FindFilePath(Util::DllPath().remove_filename(), "nvngx.dll_dlssnr.dll");
 
@@ -424,12 +426,12 @@ bool LoadForwarder()
     g_vk.probe = (PFN_VkProbe) GetProcAddress(g_vk.forwarder, "dlssnr_vk_probe");
     g_vk.init = (PFN_VkInit) GetProcAddress(g_vk.forwarder, "dlssnr_vk_init");
     g_vk.create = (PFN_VkCreate) GetProcAddress(g_vk.forwarder, "dlssnr_vk_create");
-    g_vk.evaluate = (PFN_VkEvaluate) GetProcAddress(g_vk.forwarder, "dlssnr_vk_evaluate");
+    g_vk.evaluate = (PFN_VkEvaluate) GetProcAddress(g_vk.forwarder, "dlssnr_vk_evaluate_v2");
     g_vk.release = (PFN_VkRelease) GetProcAddress(g_vk.forwarder, "dlssnr_vk_release");
 
     if (g_vk.init == nullptr || g_vk.create == nullptr || g_vk.evaluate == nullptr)
     {
-        Fail("the forwarder is missing its Vulkan entry points");
+        Fail("Update nvngx.dll_dlssnr.dll from the complete release (NR v2 exports required)");
         return false;
     }
 
@@ -612,11 +614,63 @@ void EvaluateAfterUpscaleVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* para
         return;
     }
 
-    const uint32_t width = colour->Resource.ImageViewInfo.Width;
-    const uint32_t height = colour->Resource.ImageViewInfo.Height;
-    const uint32_t guideWidth = depth->Resource.ImageViewInfo.Width;
-    const uint32_t guideHeight = depth->Resource.ImageViewInfo.Height;
+    if (colour->Type != NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW ||
+        depth->Type != NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW ||
+        motion->Type != NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW ||
+        colour->Resource.ImageViewInfo.ImageView == VK_NULL_HANDLE ||
+        depth->Resource.ImageViewInfo.ImageView == VK_NULL_HANDLE ||
+        motion->Resource.ImageViewInfo.ImageView == VK_NULL_HANDLE)
+        return;
 
+    uint32_t width = colour->Resource.ImageViewInfo.Width;
+    uint32_t height = colour->Resource.ImageViewInfo.Height;
+    uint32_t renderWidth = 0, renderHeight = 0, baseX = 0, baseY = 0;
+    params->Get(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Width, &renderWidth);
+    params->Get(NVSDK_NGX_Parameter_DLSS_Render_Subrect_Dimensions_Height, &renderHeight);
+    if (beforeSr)
+    {
+        params->Get(NVSDK_NGX_Parameter_DLSS_Input_Color_Subrect_Base_X, &baseX);
+        params->Get(NVSDK_NGX_Parameter_DLSS_Input_Color_Subrect_Base_Y, &baseY);
+        // Origin-zero padded inputs are common with dynamic resolution. Never use a preset table.
+        if (baseX || baseY || ((renderWidth == 0) != (renderHeight == 0)) ||
+            renderWidth > width || renderHeight > height)
+            return; // caller falls back to post-SR, without editing the input
+        if (renderWidth && renderHeight)
+        {
+            width = renderWidth;
+            height = renderHeight;
+        }
+    }
+    const unsigned int createFlags = GameCreateFlags(params);
+    uint32_t depthX = 0, depthY = 0, motionX = 0, motionY = 0;
+    params->Get(NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_X, &depthX);
+    params->Get(NVSDK_NGX_Parameter_DLSS_Input_Depth_Subrect_Base_Y, &depthY);
+    params->Get(NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_X, &motionX);
+    params->Get(NVSDK_NGX_Parameter_DLSS_Input_MV_SubrectBase_Y, &motionY);
+    NVSDK_NGX_Resource_VK* output = nullptr;
+    params->Get(NVSDK_NGX_Parameter_Output, (void**) &output);
+    uint32_t outputWidth = 0, outputHeight = 0;
+    if (output != nullptr && output->Type == NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW)
+    {
+        outputWidth = output->Resource.ImageViewInfo.Width;
+        outputHeight = output->Resource.ImageViewInfo.Height;
+    }
+    uint32_t declaredWidth = 0, declaredHeight = 0;
+    params->Get(NVSDK_NGX_Parameter_OutWidth, &declaredWidth);
+    params->Get(NVSDK_NGX_Parameter_OutHeight, &declaredHeight);
+    if (declaredWidth && declaredHeight)
+    {
+        outputWidth = declaredWidth;
+        outputHeight = declaredHeight;
+    }
+    const auto guides = ResolveGuideRegions(
+        { depth->Resource.ImageViewInfo.Width, depth->Resource.ImageViewInfo.Height },
+        { motion->Resource.ImageViewInfo.Width, motion->Resource.ImageViewInfo.Height },
+        { renderWidth, renderHeight }, { outputWidth, outputHeight },
+        (createFlags & NVSDK_NGX_DLSS_Feature_Flags_MVLowRes) != 0, depthX, depthY, motionX, motionY);
+    if (!guides.depth.valid() || !guides.motion.valid())
+        return;
+    const auto guideWidth = guides.depth.width, guideHeight = guides.depth.height;
     if (width == 0 || height == 0)
         return;
 
@@ -810,7 +864,6 @@ void EvaluateAfterUpscaleVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* para
     // Encode: the frame the upscaler wrote -> a display-referred proxy, plus an untouched copy
     // -----------------------------------------------------------------------------------------
 
-    const unsigned int createFlags = GameCreateFlags(params);
     const bool gameSaysHdr = (createFlags & NVSDK_NGX_DLSS_Feature_Flags_IsHDR) != 0;
     const bool depthInverted = (createFlags & NVSDK_NGX_DLSS_Feature_Flags_DepthInverted) != 0;
 
@@ -1062,15 +1115,35 @@ void EvaluateAfterUpscaleVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* para
     // The model
     // -----------------------------------------------------------------------------------------
 
-    Transition(cmdBuffer, g_vk.output, VK_IMAGE_LAYOUT_GENERAL);
-
-    const int evaluated = g_vk.evaluate(
-        (void*) cmdBuffer, g_vk.feature, g_vk.capabilityParams, &modelInput->ngx, depth, motion, &g_vk.output.ngx,
-        workWidth, workHeight, guideWidth, guideHeight, depthInverted ? 1 : 0, g_vk.reset ? 1 : 0,
-        cfg.DlssNrIntensity.value_or_default(), (int) cfg.DlssNrStyle.value_or_default(),
-        cfg.DlssNrLocalStructure.value_or_default(), cfg.DlssNrLocalTone.value_or_default(),
-        cfg.DlssNrSkinStructure.value_or_default(), cfg.DlssNrAutoMask.value_or_default() ? 1 : 0, 1.0f, 1.0f);
-
+    float mvX = 1.0f, mvY = 1.0f;
+    params->Get(NVSDK_NGX_Parameter_MV_Scale_X, &mvX);
+    params->Get(NVSDK_NGX_Parameter_MV_Scale_Y, &mvY);
+    // Match D3D12: preserve the game's vector encoding, then adjust only for the NR working scale.
+    mvX *= (float) workWidth / width;
+    mvY *= (float) workHeight / height;
+    OwnedImage* answer = &g_vk.output;
+    OwnedImage* input = modelInput;
+    int evaluated = 1;
+    for (unsigned int pass = 0; pass < passes; ++pass)
+    {
+        Transition(cmdBuffer, *input, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        Transition(cmdBuffer, *answer, VK_IMAGE_LAYOUT_GENERAL);
+        const auto tuning = Profiles::PassTuning(cfg, pass);
+        evaluated = g_vk.evaluate(
+            (void*) cmdBuffer, pass == 0 ? g_vk.feature : g_vk.laterFeatures[pass], g_vk.capabilityParams,
+            &input->ngx, depth, motion, &answer->ngx, workWidth, workHeight, guideWidth, guideHeight,
+            guides.motion.width, guides.motion.height, guides.depth.x, guides.depth.y,
+            guides.motion.x, guides.motion.y, depthInverted ? 1 : 0, g_vk.reset ? 1 : 0, tuning.intensity,
+            (int) Profiles::PassStyle(cfg, pass), tuning.structure, tuning.tone, tuning.skin,
+            tuning.autoMask ? 1 : 0, mvX, mvY);
+        if (evaluated != 1)
+            break;
+        if (pass + 1 < passes)
+        {
+            input = answer;
+            answer = answer == &g_vk.output ? &g_vk.scratch : &g_vk.output;
+        }
+    }
     g_vk.reset = false;
     g_vk.frames++;
 

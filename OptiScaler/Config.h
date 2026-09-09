@@ -264,7 +264,7 @@ class Config
     // and apply it after the game's upscaler. Takes precedence over RunBeforeSR; opt-in.
     CustomOptional<bool> DlssNrDeferredDlss { false };
     CustomOptional<bool> DlssNrResidualFg { false };
-    CustomOptional<uint32_t> DlssNrPrecision { 0 }; // 0 original FP8, 2 NVFP4 hybrid, 4 candidate hybrid
+    CustomOptional<uint32_t> DlssNrPrecision { 0 }; // 0 NVIDIA FP8 (default), 4 Experimental NVFP4 hybrid
     CustomOptional<bool> DlssNrResidualFgApproxCamera { false };
     CustomOptional<bool> DlssNrApplyAfterRR { false };
     CustomOptional<unsigned int> DlssNrRRPasses { 1 };
