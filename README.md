@@ -12,12 +12,12 @@ The upstream fork already provided experimental direct access to NVIDIA DLSS Neu
   skin structure, and auto skin mask controls. Preset hints are grouped under a collapsed advanced
   section because their visual effect is unverified; style is the primary profile selector.
 - **Padded pre-SR inputs.** Origin-zero active images inside larger colour textures run NR at the
-  active resolution. Ray Reconstruction, non-zero colour offsets and invalid rectangles retain the
+  active resolution. Non-zero colour offsets and invalid rectangles retain the
   post-SR fallback. This is not restricted to standard 1080p/1440p/4K sizes.
 - **Matching overlay and INI controls.** `RunBeforeSR` and `Passes` are exposed in both configuration and the OptiScaler overlay.
-- **Optional NR after native Ray Reconstruction (DX12).** Enable `ApplyAfterRR` separately;
-  `RRPasses` defaults to 1 and `RRWorkingScale` to 0.5 of RR's output dimensions. RR keeps its
-  original noisy inputs, and NR history is rebuilt when switching between SR and RR.
+- **Unified NR placement for SR and RR+SR.** `RunBeforeSR` runs NR before either upscaler when enabled,
+  and afterward when disabled. Both share `WorkingScale`, `Passes` and per-pass controls.
+  NR history resets when switching between SR and RR. Pre-RR visual quality remains experimental.
 - **Verified BG3 path.** Baldur's Gate 3 was tested through the `bg3_dx11.exe` D3D11-to-D3D12 bridge with two neural passes at 1920x1080 followed by DLSS Super Resolution to 3840x2160.
 - **Experimental half-rate residual FG (source preview).** Optional every-other-frame NR,
   with NVIDIA FG interpolating its DLSS-upscaled contribution. Adds a one-frame SR delay;
@@ -29,9 +29,15 @@ The upstream fork already provided experimental direct access to NVIDIA DLSS Neu
 Downloads:
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 - [Padded-input fix preview â€” v0.6.1](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.6.1-padded-presr) â€” complete package with the padded pre-SR fix, earlier skin/MFG compatibility changes and the verified FG downloader. Build/GPU-copy tested; Dawnwalker validation is pending. NVIDIA NR/FG runtimes are not bundled.
 =======
 - [Latest release - v0.7.3](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.7.3-kcd2) - KCD2 presentation fixes, corrected NR motion-vector metadata, two model options, and the Streamline 2.14.1 downloader. See [KCD2 setup](docs/DLSS-FRAME-GENERATION.md#kingdom-come-deliverance-ii).
+=======
+- [Latest release - v0.7.4](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.7.4-unified-nr) - unified NR controls for SR and RR, plus shorter menu descriptions. NR before RR is experimental.
+
+- [Previous release - v0.7.3](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.7.3-kcd2) - KCD2 presentation fixes, corrected NR motion-vector metadata, two model options, and the Streamline 2.14.1 downloader. See [KCD2 setup](docs/DLSS-FRAME-GENERATION.md#kingdom-come-deliverance-ii).
+>>>>>>> b7484ef9 (Unify NR controls for SR and RR and simplify menu descriptions)
 
 - [FP8 / NVFP4 hybrid update — v0.7.1](https://github.com/wilsjo2/OptiScaler-DLSSNR-PreSR-Multipass/releases/tag/v0.7.1-hybrid) — attempt at NVFP4 hybrid. VERY minor improvements on Blackwell. Removes async NR and fixes Streamline override startup crashes.
 
@@ -137,7 +143,11 @@ Implementation details and safety invariants are documented in [the pre-SR multi
 
 The implementation contains no BG3-specific executable names, offsets, or shaders. It is designed for 64-bit games whose DLSS Super Resolution call reaches OptiScaler's Direct3D 12 path, including its Direct3D 11/Vulkan-to-DX12 bridges. It has also run in Hogwarts Legacy and Cyberpunk 2077. Compatibility still depends on the game exposing valid colour, depth, motion-vector, resolution, and command-submission data through its upscaler integration.
 
+<<<<<<< HEAD
 Ray Reconstruction deliberately uses the post-SR path. Native Vulkan currently retains the upstream post-SR implementation. Games with unusual loaders, multiple swapchains, non-zero colour offsets, invalid render rectangles, anti-cheat, or another `dxgi.dll` mod may need a different OptiScaler proxy name or will use the guarded post-SR fallback. Origin-zero allocation padding is supported on the DX12 pre-SR path and its bridges.
+=======
+Ray Reconstruction follows the same before/after placement control as ordinary SR. v0.7.0 adds native Vulkan pre-SR and multipass NR, including origin-zero padded inputs; v0.6.2 does not contain these additions. Native Vulkan deferred/async residual modes remain unsupported. [Vulkan setup, adopted fork changes and validation limits](docs/VULKAN-PARITY-REVIEW.md). Games with unusual loaders, multiple swapchains, non-zero colour offsets, invalid render rectangles, anti-cheat, or another `dxgi.dll` mod may need a different OptiScaler proxy name or will use the guarded post-SR fallback.
+>>>>>>> b7484ef9 (Unify NR controls for SR and RR and simplify menu descriptions)
 
 ---
 

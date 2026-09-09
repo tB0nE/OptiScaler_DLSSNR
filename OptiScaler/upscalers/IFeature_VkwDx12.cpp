@@ -2156,8 +2156,8 @@ bool IFeature_VkwDx12::Evaluate(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Parameter
             InParameters->Set(NVSDK_NGX_Parameter_DLSS_Input_Bias_Current_Color_Mask, (void*) vkReactive.Dx12Resource);
 
         LOG_DEBUG("Dispatch!!");
-        if (dx12Feature->GetUpscalerType() != Upscaler::DLSSD)
-            DlssNr::EvaluateBeforeUpscale(cmdList, InParameters, Dx12CommandQueue, _frameCount);
+        DlssNr::EvaluateBeforeUpscale(cmdList, InParameters, Dx12CommandQueue, _frameCount,
+                                      dx12Feature->GetUpscalerType() == Upscaler::DLSSD);
         dx12EvalResult = dx12Feature->Evaluate(cmdList, InParameters);
 
         // The parameter block still holds the D3D12 resources written above -- the Vulkan handles are

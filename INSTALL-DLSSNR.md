@@ -113,24 +113,29 @@ See [validation and reporting instructions](docs/PADDED-PRESR.md).
 
 ## Neural Rendering with native Ray Reconstruction
 
-In a game that already supports RR, enable RR in the game's settings and enable
-**Apply after Ray Reconstruction (DX12)** in OptiScaler's Neural Rendering menu. The master
-**Enable Neural Rendering** switch must also be on. Equivalent INI settings:
+Enable RR in the game's settings and **Enable Neural Rendering** in OptiScaler.
+The same **Apply before Super Resolution** checkbox controls both ordinary SR and combined RR+SR:
+checked runs NR on the active colour input before reconstruction/upscaling; unchecked runs it afterward.
+Both use the common model-resolution slider, pass count and per-pass profiles.
 
 ```ini
 [DlssNr]
 Enabled=true
-ApplyAfterRR=true
-RRPasses=1
-RRWorkingScale=0.5
+RunBeforeSR=true
+Passes=1
+WorkingScale=1.0
 ```
 
-RR reconstructs and upscales first. NR then processes that output before frame generation.
-`RunBeforeSR` does not override this order. At 4K output, `RRWorkingScale=0.5` runs NR at
-1920x1080 and resizes its edit for composition; it does not reduce RR's own resolution.
-`RRPasses=1..3` is independent of ordinary `Passes`, while per-pass model profiles are shared.
-Switching between SR and RR rebuilds NR history even when their dimensions match.
-These controls apply to D3D12 and its bridges, not the upstream native Vulkan NR path.
+At 2560x1440 input and 4K output, `WorkingScale=1` runs NR at 2560x1440 before RR+SR,
+or 3840x2160 afterward. It does not change the game's RR/SR quality setting.
+Invalid or offset colour rectangles use the same post-upscale fallback as ordinary SR.
+Switching between SR and RR or changing placement resets NR history. DX12, its bridges and
+native Vulkan share this behavior. The separate deferred-residual DLSS experiment remains SR-only.
+
+The retired `ApplyAfterRR`, `RRPasses` and `RRWorkingScale` INI keys are ignored. Existing users
+now inherit their ordinary NR resolution and pass count, which can increase work compared with
+an old half-resolution RR setting. Before RR, NR edits noisy ray-traced colour; the combined
+path still requires in-game image-quality validation.
 
 If Cyberpunk's RR option is greyed out with this fork, avoid the `d3d12.dll` proxy: an
 [upstream report](https://github.com/Dagherbou/OptiScaler_DLSSNR/issues/8) confirmed that using

@@ -457,8 +457,8 @@ bool IFeature_Dx11wDx12::Evaluate(ID3D11DeviceContext* InDeviceContext, NVSDK_NG
                               (void*) dx11Reactive.Dx12Resource);
 
         LOG_DEBUG("Dispatch!!");
-        if (dx12Feature->GetUpscalerType() != Upscaler::DLSSD)
-            DlssNr::EvaluateBeforeUpscale(cmdList, InParameters, Dx12CommandQueue, _frameCount);
+        DlssNr::EvaluateBeforeUpscale(cmdList, InParameters, Dx12CommandQueue, _frameCount,
+                                      dx12Feature->GetUpscalerType() == Upscaler::DLSSD);
         dx12EvalResult = dx12Feature->Evaluate(cmdList, InParameters);
 
         // DLSS 5 Neural Rendering rides the bridge: at this moment the block carries the D3D12 copies

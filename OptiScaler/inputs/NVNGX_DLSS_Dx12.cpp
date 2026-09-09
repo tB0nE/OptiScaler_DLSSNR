@@ -1157,10 +1157,9 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D12_EvaluateFeature(ID3D12GraphicsCom
         {
             LOG_DEBUG("Passthrough to native DLSS EvaluateFeature for handle {}", handleId);
 
-            // Pre-SR placement is valid only for Super Resolution. Ray Reconstruction carries a
-            // different set of inputs and stays on the post-upscale path.
-            if (feature == NVSDK_NGX_Feature_SuperSampling)
-                DlssNr::EvaluateBeforeUpscale(InCmdList, InParameters);
+            if (feature == NVSDK_NGX_Feature_SuperSampling || feature == NVSDK_NGX_Feature_RayReconstruction)
+                DlssNr::EvaluateBeforeUpscale(InCmdList, InParameters, nullptr, 0,
+                                              feature == NVSDK_NGX_Feature_RayReconstruction);
 
             NVSDK_NGX_Result result =
                 NVNGXProxy::D3D12_EvaluateFeature()(InCmdList, InFeatureHandle, InParameters, InCallback);
@@ -1195,8 +1194,9 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_D3D12_EvaluateFeature(ID3D12GraphicsCom
     if (lastDlssgCameraFar.has_value())
         InParameters->Set("DLSSG.CameraFar", lastDlssgCameraFar.value());
 
-    if (feature == NVSDK_NGX_Feature_SuperSampling)
-        DlssNr::EvaluateBeforeUpscale(InCmdList, InParameters);
+    if (feature == NVSDK_NGX_Feature_SuperSampling || feature == NVSDK_NGX_Feature_RayReconstruction)
+        DlssNr::EvaluateBeforeUpscale(InCmdList, InParameters, nullptr, 0,
+                                      feature == NVSDK_NGX_Feature_RayReconstruction);
 
     // OptiScaler internal handling
     const NVSDK_NGX_Result optiResult = TryEvaluateOptiFeature(InCmdList, InFeatureHandle, InParameters, InCallback);

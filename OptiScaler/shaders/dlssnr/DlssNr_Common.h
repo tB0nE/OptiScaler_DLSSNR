@@ -95,8 +95,8 @@ struct DlssNrFrameInfo
     // Owned copy, not the game's Color: always arrives/returns NON_PIXEL_SHADER_RESOURCE.
     bool PrivateColorCopy = false;
     bool IndependentCommands = false; // owned command list, no game root signature to restore
-    // A native RR result selects independent NR cost controls and a separate history lifecycle.
-    bool AfterRayReconstruction = false;
+    // Reset temporal history when switching between ordinary SR and Ray Reconstruction.
+    bool RayReconstruction = false;
 
     // Submission epoch supplied by the caller. Native DX12 uses the wrapped swapchain Present count;
     // the DX11/Vulkan bridges use their successfully submitted frame counter. A feature created in an

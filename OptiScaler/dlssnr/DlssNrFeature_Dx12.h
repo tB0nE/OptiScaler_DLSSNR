@@ -33,17 +33,17 @@ inline constexpr unsigned int MaxPassCount = 3;
 // timingQueue is the queue this command list will be executed on, when the caller knows it.
 // State::currentCommandQueue only exists once a D3D12 swapchain has been created, which a Vulkan
 // game never does -- so without this the pass runs and never reports what it cost.
-// forcePost identifies an RR feature: selects ApplyAfterRR, RRPasses and RRWorkingScale.
-// Do not set it for ordinary SR fallback; that decision is made from Color's active subrect.
+// rayReconstruction identifies the feature for history reset and the SR-only deferred experiment.
+// Placement and model cost controls are shared by SR and RR+SR.
 void EvaluateAfterUpscale(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* params,
-                          ID3D12CommandQueue* timingQueue = nullptr, bool forcePost = false,
+                          ID3D12CommandQueue* timingQueue = nullptr, bool rayReconstruction = false,
                           unsigned long long submissionEpoch = 0);
 
-// Runs the same pass over Color immediately before Super Resolution consumes it. The call is a no-op
+// Runs the same pass over Color immediately before SR or RR+SR consumes it. The call is a no-op
 // unless RunBeforeSR is enabled. Color is returned in its original readable state.
 void EvaluateBeforeUpscale(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* params,
                            ID3D12CommandQueue* timingQueue = nullptr,
-                           unsigned long long submissionEpoch = 0);
+                           unsigned long long submissionEpoch = 0, bool rayReconstruction = false);
 
 
 
