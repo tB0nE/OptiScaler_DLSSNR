@@ -205,7 +205,7 @@ bool CreateHalfRate(Generation& g, ID3D12GraphicsCommandList* cmd, unsigned long
 }
 
 bool PrepareHalfRate(Generation& g, ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
-                     ID3D12Resource* motion, unsigned long long epoch)
+                     ID3D12Resource* motion, unsigned long long epoch, unsigned long long submittedEpoch)
 {
     if (!g.halfRequested) return false;
     if (!(g.flags & NVSDK_NGX_DLSS_Feature_Flags_MVLowRes) ||
@@ -218,11 +218,11 @@ bool PrepareHalfRate(Generation& g, ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Pa
     if (!g.half)
     {
         g.halfStatus = "initializing NVIDIA FG";
-        if (!CreateHalfRate(g, cmd, epoch)) g.half->failed = true;
+        if (!CreateHalfRate(g, cmd, submittedEpoch)) g.half->failed = true;
         return false;
     }
     auto& h = *g.half;
-    if (!h.ready || h.failed || epoch == h.createEpoch) return false;
+    if (!h.ready || h.failed || submittedEpoch == h.createEpoch) return false;
     if (g.reset || UInt(source, NVSDK_NGX_Parameter_Reset) || epoch != h.lastEpoch + 1) h.Reset();
     h.lastEpoch = epoch;
     auto desc = motion->GetDesc();
@@ -267,7 +267,8 @@ bool PrepareHalfRate(Generation& g, ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Pa
 }
 
 void Before(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
-            unsigned long long epoch, ID3D12CommandQueue* queue, bool privateJob = false)
+            unsigned long long epoch, unsigned long long submittedEpoch,
+            ID3D12CommandQueue* queue, bool privateJob = false)
 {
     if (pending.cmd && current)
     {
@@ -374,9 +375,8 @@ void Before(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
     else device->Release();
     auto& g = *current;
     if (g.failed) return;
-    // NrSeamEpoch() (DlssNr_Dx12.cpp) advances the epoch on every Before seam even when the
-    // presented-frame counter stalls (a DXGI_PRESENT_TEST between two rendered frames), so this
-    // is only reachable on a genuine second upscale in one NR frame. Skip it; the next runs.
+    // Native seams have a logical per-evaluate identity. Bridges retain the submitted epoch
+    // so a second upscale in the same bridge submission is still rejected.
     if (g.began && g.lastBeginEpoch == epoch)
     { g.reset = true; Say("inactive: more than one upscale in a submission epoch"); return; }
     g.began = true;
@@ -416,12 +416,13 @@ void Before(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
             { g.failed = true; Say("sample-and-hold guide initialization failed"); return; }
             Barrier(cmd, g.zeroMotion, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         }
-        g.createEpoch = epoch;
+        g.createEpoch = submittedEpoch;
         Say("private DLSS created; waiting for a later submission epoch");
         return;
     }
-    if (epoch == g.createEpoch)
-    { LOG_DEBUG("DLSS-NR deferred: Before skipped -- epoch {} == createEpoch (feature built this frame)", epoch); return; }
+    // Synthetic seam ticks cannot prove that a feature's creation commands were submitted.
+    if (submittedEpoch == g.createEpoch)
+    { LOG_DEBUG("DLSS-NR deferred: waiting after feature creation at submitted epoch {}", submittedEpoch); return; }
 
     if (g.sampleAndHold)
     {
@@ -440,7 +441,7 @@ void Before(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
     if (!g.sampleAndHold)
     {
         ScopedNrStateEnvelope envelope(cmd);
-        half = PrepareHalfRate(g, cmd, source, motion, epoch);
+        half = PrepareHalfRate(g, cmd, source, motion, epoch, submittedEpoch);
     }
     if (!half && g.half) g.half->Reset();
     if (half && g.half->havePrevious && g.half->previousWasAnchor)
@@ -462,7 +463,7 @@ void Before(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
     DlssNrFrameInfo frame {};
     frame.BeforeUpscale = frame.PrivateColorCopy = true;
     frame.IndependentCommands = privateJob;
-    frame.SubmissionEpoch = epoch;
+    frame.SubmissionEpoch = submittedEpoch;
     frame.RenderSubrectWidth = g.w; frame.RenderSubrectHeight = g.h;
     frame.DepthInverted = (flags & NVSDK_NGX_DLSS_Feature_Flags_DepthInverted) != 0;
     frame.ColourIsLinearHdr = (UInt(source, NVSDK_NGX_Parameter_DLSS_Feature_Create_Flags) &
@@ -523,7 +524,7 @@ void Before(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
 // Background GPU job: produce only the DLSS-upscaled residual. No raster composition,
 // regular FG call, or presentation operation is recorded on this queue.
 bool ResolvePrivate(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source,
-                    unsigned long long epoch, ID3D12Resource* destination)
+                    [[maybe_unused]] unsigned long long epoch, ID3D12Resource* destination)
 {
     const auto pair = pending; pending = {};
     // No epoch match, as in After() -- see the comment there. (Dead path on this branch: async NR
@@ -549,17 +550,8 @@ void After(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source, unsigned
 {
     const auto pair = pending;
     pending = {}; // Consume once, only for the immediately matching successful upscale.
-    // Deliberately no epoch match. `epoch` is NrSeamEpoch() (DlssNr_Dx12.cpp), which is monotonic on
-    // the Before seam but on this After seam still just follows the raw presented-frame counter --
-    // and that counter is incremented from the wrapped swapchain's Present handler, on a thread that
-    // runs concurrently with the render thread recording this evaluate. In a pipelined engine it can
-    // tick between this evaluate's Before and After seam (observed +1 one-to-two times a second in
-    // NBA 2K26, Frame Generation OFF -- FG only raises the present rate, it is not required), which
-    // is not a frame boundary. Freshness is already structural: Before() clears `pending` at the top
-    // of every frame and it is consumed once here, so a surviving pending is always this evaluate's.
-    // Identity is the cmd list + parameter block + output resource triple. Gating on the epoch here
-    // only manufactured spurious private-SR history restarts -> temporal reset -> a two-frame
-    // reconstruction pop (the reported screen flash).
+    // Match and consume the immediately preceding Before by resource identity, not Present timing.
+    // The pending epoch also owns history continuity if Present changed while DLSS was recording.
     if (!current || current->failed || pair.cmd != cmd || pair.caller != source ||
         pair.output != GetResource(source, NVSDK_NGX_Parameter_Output, "DLSSD.Output"))
     {
@@ -679,7 +671,7 @@ void After(ID3D12GraphicsCommandList* cmd, NVSDK_NGX_Parameter* source, unsigned
     Barrier(cmd, g.residualOutput, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     if (g.sampleAndHold)
     {
-        if (ok && !pair.skipNr) g.hold.SampleSucceeded(epoch);
+        if (ok && !pair.skipNr) g.hold.SampleSucceeded(pair.epoch);
         else g.hold.Reset();
     }
     if (half)
