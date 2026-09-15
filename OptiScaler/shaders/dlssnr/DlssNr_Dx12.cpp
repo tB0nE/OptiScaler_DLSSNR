@@ -1806,9 +1806,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     const auto workHeight = (unsigned int) (height * workScale + 0.5f);
     const bool reduced = workWidth != width || workHeight != height;
     const unsigned int configuredPasses =
-        std::clamp(cfg.DlssNrPasses.value_or_default(),
-                   1u, cfg.DlssNrUnlockPasses.value_or_default() ? DlssNr::MaxPassCount
-                                                               : DlssNr::DefaultMaxPassCount);
+        std::clamp(cfg.DlssNrPasses.value_or_default(), 1u, DlssNr::MaxPassCount);
     const bool proxyBackend = cfg.DlssNrUseProxy.value_or_default();
     const unsigned int requestedPasses = proxyBackend ? 1u : configuredPasses;
 

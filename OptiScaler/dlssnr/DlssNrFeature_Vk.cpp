@@ -1,8 +1,6 @@
 #include "pch.h"
 
 #include "DlssNrFeature_Vk.h"
-#include "DlssNrFeature_Dx12.h"
-#include "PassProfiles.h"
 
 #include <Config.h>
 #include <State.h>
@@ -72,23 +70,12 @@ struct VkState
 
     bool ngxInitialised = false;
     void* feature = nullptr;
-    void* laterFeatures[DlssNr::MaxPassCount] {};
-    Profiles::NrPassTuning builtTuning[DlssNr::MaxPassCount] {};
-    unsigned int builtPreset[DlssNr::MaxPassCount] {};
-    unsigned int builtStyle[DlssNr::MaxPassCount] {};
-    unsigned int activePasses = 0;
-    VkEvent creationReady = VK_NULL_HANDLE;
-    bool creationPending = false;
     NVSDK_NGX_Parameter* capabilityParams = nullptr;
 
     // What the model writes, the proxy it is shown, and the frame as the upscaler left it.
     OwnedImage output;
-    OwnedImage scratch;
     OwnedImage proxy;
     OwnedImage keep;
-    OwnedImage preColor;
-    bool beforeSr = false;
-    bool rayReconstruction = false;
 
     // The proxy at the model's working size, when that is below the frame. The model -- 98% of the
     // cost -- then runs on this instead of the full proxy, which is the whole point of the working
@@ -376,18 +363,8 @@ void Transition(VkCommandBuffer cmd, OwnedImage& img, VkImageLayout to)
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = img.image;
     barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    const auto access = [](VkImageLayout layout) -> VkAccessFlags {
-        switch (layout)
-        {
-        case VK_IMAGE_LAYOUT_UNDEFINED: return 0;
-        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: return VK_ACCESS_TRANSFER_READ_BIT;
-        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: return VK_ACCESS_TRANSFER_WRITE_BIT;
-        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: return VK_ACCESS_SHADER_READ_BIT;
-        default: return VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        }
-    };
-    barrier.srcAccessMask = access(img.layout);
-    barrier.dstAccessMask = access(to);
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
 
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
                          nullptr, 1, &barrier);
@@ -517,14 +494,12 @@ bool ExposureOfferedVk() { return g_vk.exposureOffered; }
 
 std::optional<double> LastGpuTimeVk() { return g_vk.lastGpuTime; }
 
-static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* params, VkInstance instance,
-                             VkPhysicalDevice physicalDevice, VkDevice device, bool beforeSr, bool rayReconstruction,
-                             bool& applied, bool* handled = nullptr)
+void EvaluateAfterUpscaleVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* params, VkInstance instance,
+                            VkPhysicalDevice physicalDevice, VkDevice device)
 {
-    applied = false;
     auto& cfg = *Config::Instance();
 
-    if (cfg.DlssNrDeferredDlss.value_or_default() && !rayReconstruction)
+    if (cfg.DlssNrDeferredDlss.value_or_default())
     {
         static bool warnedDeferred = false;
         if (!warnedDeferred)
@@ -554,7 +529,7 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     NVSDK_NGX_Resource_VK* depth = nullptr;
     NVSDK_NGX_Resource_VK* motion = nullptr;
 
-    params->Get(beforeSr ? NVSDK_NGX_Parameter_Color : NVSDK_NGX_Parameter_Output, (void**) &colour);
+    params->Get(NVSDK_NGX_Parameter_Output, (void**) &colour);
     params->Get(NVSDK_NGX_Parameter_Depth, (void**) &depth);
     params->Get(NVSDK_NGX_Parameter_MotionVectors, (void**) &motion);
 
@@ -696,24 +671,17 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     if (!guides.depth.valid() || !guides.motion.valid())
         return;
     const auto guideWidth = guides.depth.width, guideHeight = guides.depth.height;
-
     if (width == 0 || height == 0)
         return;
-    if (handled)
-        *handled = true; // includes warm-up: do not recreate post-SR resources in this command buffer
 
     // The model's working size. The slider is a fraction of the frame; at 1 it is the frame, and the
     // reduced path below never runs, so the default is byte-for-byte what it was.
     // Above 1 the model supersamples (up to 2x): the proxy is enlarged, the model runs above native,
     // and superDown averages the answer back. Vulkan matches the D3D12 cap.
-    float workScale = cfg.DlssNrWorkingScale.value_or_default();
-    workScale = std::isfinite(workScale) ? std::clamp(workScale, 0.25f, 2.0f) : 1.0f;
-    const uint32_t workWidth = std::max(1u, (uint32_t) (width * workScale + 0.5f));
-    const uint32_t workHeight = std::max(1u, (uint32_t) (height * workScale + 0.5f));
+    const float workScale = std::clamp(cfg.DlssNrWorkingScale.value_or_default(), 0.25f, 2.0f);
+    const uint32_t workWidth = (uint32_t) (width * workScale + 0.5f);
+    const uint32_t workHeight = (uint32_t) (height * workScale + 0.5f);
     const bool reduced = workWidth != width || workHeight != height;
-    const unsigned int passes = std::clamp(cfg.DlssNrPasses.value_or_default(),
-                                           1u, cfg.DlssNrUnlockPasses.value_or_default() ? DlssNr::MaxPassCount
-                                                                                       : DlssNr::DefaultMaxPassCount);
 
     g_vk.instance = instance;
     g_vk.physicalDevice = physicalDevice;
@@ -734,15 +702,6 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
 
     // Initialise NGX on this device, once. The snippet path is the model itself; the forwarder loads
     // it so the caller gate sees a module named nvngx.dll.
-    if (g_vk.creationPending)
-    {
-        // A second NGX evaluate need not mean the previous command buffer was submitted.
-        // Poll the GPU marker without waiting; repeated calls during warm-up stay clean.
-        if (vkGetEventStatus(device, g_vk.creationReady) != VK_EVENT_SET)
-            return;
-        g_vk.creationPending = false;
-    }
-
     if (!g_vk.ngxInitialised)
     {
         auto snippet = FindSnippet();
@@ -828,14 +787,8 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
 
     // Resize. The feature is built for a size and has to be rebuilt when the frame OR the working
     // size changes -- moving the slider is a rebuild, which is why it is compared here.
-    bool profileChanged = g_vk.activePasses != passes;
-    for (unsigned int pass = 0; pass < passes; ++pass)
-        profileChanged |= g_vk.builtTuning[pass] != Profiles::PassTuning(cfg, pass) ||
-                          g_vk.builtPreset[pass] != Profiles::PassPreset(cfg, pass) ||
-                          g_vk.builtStyle[pass] != Profiles::PassStyle(cfg, pass);
     if (g_vk.width != width || g_vk.height != height || g_vk.workWidth != workWidth ||
-        g_vk.workHeight != workHeight || g_vk.beforeSr != beforeSr ||
-        g_vk.rayReconstruction != rayReconstruction || profileChanged)
+        g_vk.workHeight != workHeight)
     {
         // This block releases the feature and frees the surfaces below IMMEDIATELY. A frame-size
         // change is already fenced by the game -- it recreates the swapchain around it -- but moving
@@ -852,13 +805,6 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
             g_vk.release(g_vk.feature);
             g_vk.feature = nullptr;
         }
-        for (auto& feature : g_vk.laterFeatures)
-        {
-            if (feature && g_vk.release)
-                g_vk.release(feature);
-            feature = nullptr;
-        }
-        DestroyImage(g_vk.scratch);
 
         const VkFormat working = VK_FORMAT_R16G16B16A16_SFLOAT;
 
@@ -878,10 +824,8 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
         // the source the downsample reads, keep is the untouched frame the resolve composites onto.
         // outputNative is the native buffer the supersample down-leg averages the answer into.
         const bool ok = CreateImage(g_vk.output, workWidth, workHeight, working, true) &&
-                        (passes == 1 || CreateImage(g_vk.scratch, workWidth, workHeight, working, true)) &&
                         CreateImage(g_vk.proxy, width, height, working, true) &&
                         CreateImage(g_vk.keep, width, height, working, true) &&
-                        (!beforeSr || CreateImage(g_vk.preColor, width, height, working, false)) &&
                         (!reduced || CreateImage(g_vk.proxySmall, workWidth, workHeight, working, true)) &&
                         (workScale <= 1.0f || CreateImage(g_vk.outputNative, width, height, working, true));
 
@@ -895,58 +839,25 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
         g_vk.height = height;
         g_vk.workWidth = workWidth;
         g_vk.workHeight = workHeight;
-        g_vk.beforeSr = beforeSr;
-        g_vk.rayReconstruction = rayReconstruction;
-        g_vk.activePasses = passes;
-        for (unsigned int pass = 0; pass < passes; ++pass)
-        {
-            g_vk.builtTuning[pass] = Profiles::PassTuning(cfg, pass);
-            g_vk.builtPreset[pass] = Profiles::PassPreset(cfg, pass);
-            g_vk.builtStyle[pass] = Profiles::PassStyle(cfg, pass);
-        }
         g_vk.reset = true;
     }
 
-    bool created = false;
-    for (unsigned int pass = 0; pass < passes; ++pass)
+    if (g_vk.feature == nullptr)
     {
-        void*& feature = pass == 0 ? g_vk.feature : g_vk.laterFeatures[pass];
-        if (feature)
-            continue;
-        const auto tuning = Profiles::PassTuning(cfg, pass);
-        feature = g_vk.create((void*) cmdBuffer, g_vk.capabilityParams, workWidth, workHeight,
-                             (int) Profiles::PassPreset(cfg, pass), tuning.intensity,
-                             (int) Profiles::PassStyle(cfg, pass), tuning.structure, tuning.tone,
-                             tuning.skin, tuning.autoMask ? 1 : 0, 1);
-        if (!feature)
+        g_vk.feature = g_vk.create(
+            (void*) cmdBuffer, g_vk.capabilityParams, workWidth, workHeight, (int) cfg.DlssNrPreset.value_or_default(),
+            cfg.DlssNrIntensity.value_or_default(), (int) cfg.DlssNrStyle.value_or_default(),
+            cfg.DlssNrLocalStructure.value_or_default(), cfg.DlssNrLocalTone.value_or_default(),
+            cfg.DlssNrSkinStructure.value_or_default(), cfg.DlssNrAutoMask.value_or_default() ? 1 : 0, 1);
+
+        if (g_vk.feature == nullptr)
         {
             Fail("the model would not build a feature on this device");
             return;
         }
 
-        LOG_INFO("DLSS-NR Vulkan: pass {} built at {}x{} (frame {}x{}, {} SR)", pass + 1,
-                 workWidth, workHeight, width, height, beforeSr ? "before" : "after");
-        created = true;
+        LOG_INFO("DLSS-NR Vulkan: feature up at {}x{} (frame {}x{})", workWidth, workHeight, width, height);
         g_vk.reset = true;
-    }
-    // NGX creation may record GPU uploads. Do not evaluate until a subsequent submission,
-    // just as on D3D12. Leave this warm-up frame clean instead of evaluating unready weights.
-    if (created)
-    {
-        if (g_vk.creationReady == VK_NULL_HANDLE)
-        {
-            VkEventCreateInfo info { VK_STRUCTURE_TYPE_EVENT_CREATE_INFO };
-            if (vkCreateEvent(device, &info, nullptr, &g_vk.creationReady) != VK_SUCCESS)
-            {
-                Fail("could not allocate the model creation marker");
-                return;
-            }
-        }
-        else
-            vkResetEvent(device, g_vk.creationReady); // rebuild above drained previous GPU users
-        vkCmdSetEvent(cmdBuffer, g_vk.creationReady, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-        g_vk.creationPending = true;
-        return;
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1054,7 +965,7 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     // Inert on the only hardware this model runs on, wrong everywhere it is read.
     if (!g_vk.pass->Dispatch(cmdBuffer, encode, width, height, colour->Resource.ImageViewInfo.ImageView,
                              VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, g_vk.proxy.view, g_vk.keep.view,
-                             beforeSr ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL))
+                             VK_IMAGE_LAYOUT_GENERAL))
     {
         Fail("the encode dispatch failed");
         return;
@@ -1233,7 +1144,6 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
             answer = answer == &g_vk.output ? &g_vk.scratch : &g_vk.output;
         }
     }
-
     g_vk.reset = false;
     g_vk.frames++;
 
@@ -1256,14 +1166,14 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     // bilinear tap the Nx answer would otherwise get, which aliases the model's detail into noise. On
     // failure it falls back to the Nx pair (modelInput + output), the old behaviour.
     OwnedImage* resolveProxy = modelInput;
-    OwnedImage* resolveAnswer = answer;
+    OwnedImage* resolveAnswer = &g_vk.output;
 
     if (workScale > 1.0f && g_vk.superDown && g_vk.superDown->IsInit() && g_vk.outputNative.Valid())
     {
-        Transition(cmdBuffer, *answer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        Transition(cmdBuffer, g_vk.output, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         Transition(cmdBuffer, g_vk.outputNative, VK_IMAGE_LAYOUT_GENERAL);
 
-        VkImageInfo dsin = ImageInfoOf(*answer);
+        VkImageInfo dsin = ImageInfoOf(g_vk.output);
         VkImageInfo dsout = ImageInfoOf(g_vk.outputNative);
 
         if (g_vk.superDown->Dispatch(cmdBuffer, dsin, dsout))
@@ -1277,20 +1187,13 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     Transition(cmdBuffer, *resolveAnswer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     Transition(cmdBuffer, g_vk.keep, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-    if (beforeSr)
-        Transition(cmdBuffer, g_vk.preColor, VK_IMAGE_LAYOUT_GENERAL);
     if (!g_vk.pass->Dispatch(cmdBuffer, resolve, width, height, resolveProxy->view, resolveAnswer->view,
-                             g_vk.keep.view, VK_NULL_HANDLE,
-                             beforeSr ? g_vk.preColor.view : colour->Resource.ImageViewInfo.ImageView,
+                             g_vk.keep.view, VK_NULL_HANDLE, colour->Resource.ImageViewInfo.ImageView,
                              VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL))
     {
         Fail("the resolve dispatch failed");
         return;
     }
-
-    if (beforeSr)
-        Transition(cmdBuffer, g_vk.preColor, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    applied = true;
 
     // Close it, and read the pair from three frames ago -- retired by now, so the read does not wait.
     if (g_vk.queryPool != VK_NULL_HANDLE)
@@ -1324,30 +1227,8 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     if (!reported && g_vk.frames > 2)
     {
         reported = true;
-        LOG_INFO("DLSS-NR Vulkan: running {} SR at {}x{}, guides {}x{}", beforeSr ? "before" : "after",
-                 width, height, guideWidth, guideHeight);
+        LOG_INFO("DLSS-NR Vulkan: running natively at {}x{}, guides {}x{}", width, height, guideWidth, guideHeight);
     }
-}
-
-NVSDK_NGX_Resource_VK* EvaluateBeforeUpscaleVk(VkCommandBuffer cmd, NVSDK_NGX_Parameter* params,
-                                             VkInstance instance, VkPhysicalDevice pd, VkDevice device, bool& handled,
-                                             bool rayReconstruction)
-{
-    handled = false;
-    if (!Config::Instance()->DlssNrRunBeforeSr.value_or_default())
-        return nullptr;
-    bool applied = false;
-    EvaluateAtSeamVk(cmd, params, instance, pd, device, true, rayReconstruction, applied, &handled);
-    return applied ? &g_vk.preColor.ngx : nullptr;
-}
-
-void EvaluateAfterUpscaleVk(VkCommandBuffer cmd, NVSDK_NGX_Parameter* params, VkInstance instance,
-                            VkPhysicalDevice pd, VkDevice device, bool rayReconstruction, bool ranBefore)
-{
-    if (ranBefore)
-        return; // per-evaluate result, not a global frame counter that can suppress a different feature
-    bool applied = false;
-    EvaluateAtSeamVk(cmd, params, instance, pd, device, false, rayReconstruction, applied);
 }
 
 void ShutdownVk(bool deviceAlive)
@@ -1367,20 +1248,13 @@ void ShutdownVk(bool deviceAlive)
         g_vk.superDown.release();
         g_vk.nrScaler = Scaler::Count;
         g_vk.feature = nullptr;
-        for (auto& feature : g_vk.laterFeatures)
-            feature = nullptr;
-        g_vk.activePasses = 0;
-        g_vk.creationReady = VK_NULL_HANDLE;
-        g_vk.creationPending = false;
         g_vk.capabilityParams = nullptr;
         g_vk.queryPool = VK_NULL_HANDLE;
         g_vk.output = OwnedImage {};
-        g_vk.scratch = OwnedImage {};
         g_vk.proxy = OwnedImage {};
         g_vk.proxySmall = OwnedImage {};
         g_vk.outputNative = OwnedImage {};
         g_vk.keep = OwnedImage {};
-        g_vk.preColor = OwnedImage {};
         g_vk.meter = OwnedImage {};
 
         for (int i = 0; i < 4; ++i)
@@ -1413,25 +1287,11 @@ void ShutdownVk(bool deviceAlive)
 
     g_vk.feature = nullptr;
 
-    for (auto& feature : g_vk.laterFeatures)
-    {
-        if (feature && g_vk.release)
-            g_vk.release(feature);
-        feature = nullptr;
-    }
-    g_vk.activePasses = 0;
-    if (g_vk.creationReady != VK_NULL_HANDLE)
-        vkDestroyEvent(g_vk.device, g_vk.creationReady, nullptr);
-    g_vk.creationReady = VK_NULL_HANDLE;
-    g_vk.creationPending = false;
-
     DestroyImage(g_vk.output);
-    DestroyImage(g_vk.scratch);
     DestroyImage(g_vk.proxy);
     DestroyImage(g_vk.proxySmall);
     DestroyImage(g_vk.outputNative);
     DestroyImage(g_vk.keep);
-    DestroyImage(g_vk.preColor);
     DestroyImage(g_vk.meter);
     DestroyMeterReadback();
 

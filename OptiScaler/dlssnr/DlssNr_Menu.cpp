@@ -193,14 +193,18 @@ void RenderMenu(Config* config, float menuResScale)
         }
         else if (!DlssNr::IsRunning() && !vulkan)
         {
-            const char* reason = DlssNr::FailureReason();
+            const auto feature = State::Instance().currentFeature;
+            const bool nativeVk = feature && feature->Api() == API::Vulkan && !feature->IsWithDx12();
+            const char* reason = nativeVk ? DlssNr::FailureReasonVk() : DlssNr::FailureReason();
 
             if (reason[0] != 0)
             {
                 ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "Off for this session: %s.", reason);
                 ImGui::SameLine();
 
-                if (ImGui::SmallButton("Retry"))
+                if (nativeVk)
+                    ImGui::TextUnformatted("Restart the game to retry native Vulkan NR.");
+                else if (ImGui::SmallButton("Retry"))
                     DlssNr::RetryAfterFailure();
             }
             else if (feature && feature->Api() == API::DX11 && !feature->IsWithDx12())
@@ -249,7 +253,23 @@ void RenderMenu(Config* config, float menuResScale)
 
         ImGui::SeparatorText("Performance");
 
-            HelpMarker("Process the image repeatedly. More passes strengthen the effect and increase GPU cost.\nEach pass has its own settings and history. Start with 1.");        }
+        {
+            int passes = (int) std::clamp(config->DlssNrPasses.value_or_default(), 1u, DlssNr::MaxPassCount);
+            const ImVec4 colour = passes <= 1   ? ImVec4(0.35f, 0.88f, 0.38f, 1.0f)
+                                  : passes == 2 ? ImVec4(0.95f, 0.70f, 0.20f, 1.0f)
+                                                : ImVec4(0.92f, 0.30f, 0.25f, 1.0f);
+
+            ImGui::PushStyleColor(ImGuiCol_Text, colour);
+            ImGui::PushStyleColor(ImGuiCol_SliderGrab, colour);
+
+            if (ImGui::SliderInt("Model passes", &passes, 1, (int) DlssNr::MaxPassCount,
+                                 passes == 1 ? "%d (normal)" : "%dx model cost"))
+                config->DlssNrPasses = (uint32_t) std::clamp(passes, 1, (int) DlssNr::MaxPassCount);
+
+            ImGui::PopStyleColor(2);
+
+            HelpMarker("Process the image repeatedly. More passes strengthen the effect and increase GPU cost.\nEach pass has its own settings and history. Start with 1.");
+        }
 
         // Any percentage, rather than a handful of steps somebody chose in advance. The lower bound
         // is 25%: below that the model is working on so little of the picture that its answer no
@@ -422,27 +442,6 @@ void RenderMenu(Config* config, float menuResScale)
             ImGui::SameLine();
             if (ImGui::SmallButton("Reset##mask"))
                 config->DlssNrPass3AutoMask = std::optional<bool> {};
-            ImGui::TreePop();
-        }
-
-        const unsigned int visiblePasses = std::clamp(config->DlssNrPasses.value_or_default(), 1u, passLimit);
-        for (unsigned int pass = 3; pass < visiblePasses; ++pass)
-        {
-            auto& settings = config->DlssNrExtraPasses[pass - 3];
-            if (!ImGui::TreeNode(std::format("Pass {}", pass + 1).c_str()))
-                continue;
-            ImGui::TextWrapped("Defaults: inherit Pass 1; Local tone = 0.");
-            InheritedProfileCombo("Style", &settings.style, inheritedStyles, IM_ARRAYSIZE(inheritedStyles));
-            DeferredSlider("Intensity", &settings.intensity, 0.0f, 2.0f, config->DlssNrIntensity.value_or_default(), "%.2f", true);
-            DeferredSlider("Local structure", &settings.structure, 0.0f, 2.0f, config->DlssNrLocalStructure.value_or_default(), "%.2f", true);
-            DeferredSlider("Local tone", &settings.tone, 0.0f, 2.0f, 0.0f, "%.2f", true);
-            DeferredSlider("Skin structure", &settings.skin, -1.0f, 2.0f, config->DlssNrSkinStructure.value_or_default(), "%.2f", true);
-            bool mask = settings.autoMask.value_or(config->DlssNrAutoMask.value_or_default());
-            if (ImGui::Checkbox("Auto skin mask", &mask))
-                settings.autoMask = mask;
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Reset##mask"))
-                settings.autoMask = std::optional<bool> {};
             ImGui::TreePop();
         }
 
