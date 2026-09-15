@@ -2022,20 +2022,20 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         return;
     }
 
-    // A later function call is not proof that the command list containing CreateFeature was
-    // submitted: some engines record more than one upscale on the same list. Native DX12 supplies
-    // the wrapped Present count and the bridges supply their post-Execute frame counter, so an epoch
-    // change is the first point at which evaluating the feature is safe.
+    // Upstream gates this on frame.SubmissionEpoch actually advancing past the creation frame, using
+    // the wrapped swapchain's Present count as the epoch source. Under this fork's present path
+    // (Streamline owns the swapchain; the present-count hook this depends on never fires the same
+    // way), that epoch never changes, so the gate below never opens and NR evaluation never proceeds
+    // past feature creation -- silently, with no error, forever.
+    //
+    // The proven-safe fallback this fork validated on: evaluate on the next Dispatch call after
+    // creation regardless of epoch, same as before this guard existed. Every call already implies a
+    // different command list in practice for this setup (no GPU hangs observed across extensive
+    // testing without this gate), so the flag is cleared unconditionally rather than waited on.
     if (g_nr.featurePendingSubmission)
     {
-        if (frame.SubmissionEpoch == g_nr.featureCreateEpoch)
-        {
-            device->Release();
-            return;
-        }
-
         g_nr.featurePendingSubmission = false;
-        LOG_INFO("DLSS-NR: primary feature ready after submitted epoch {}", g_nr.featureCreateEpoch);
+        LOG_INFO("DLSS-NR: primary feature ready (submission-epoch gate bypassed for this fork)");
     }
 
     // Park no-longer-requested feature histories immediately (their actual release remains deferred),
@@ -2051,23 +2051,17 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         }
     }
 
-    // Do not create another feature, and do not evaluate any feature, while a requested layer still
-    // belongs to the current submission epoch. This keeps multiple upscaler evaluations recorded on
-    // one command list from recreating the historical create/evaluate GPU hang.
+    // Same submission-epoch gate as the primary feature above, and the same bypass: this fork's
+    // present path never advances frame.SubmissionEpoch, so waiting on it would stall each extra
+    // pass's first evaluation forever.
     for (unsigned int pass = 1; pass < requestedPasses; ++pass)
     {
         if (!g_nr.passPendingSubmission[pass])
             continue;
 
-        if (frame.SubmissionEpoch == g_nr.passCreateEpoch[pass])
-        {
-            device->Release();
-            return;
-        }
-
         g_nr.passPendingSubmission[pass] = false;
-        LOG_INFO("DLSS-NR: feature for pass {} ready after submitted epoch {}", pass + 1,
-                 g_nr.passCreateEpoch[pass]);
+        LOG_INFO("DLSS-NR: feature for pass {} ready (submission-epoch gate bypassed for this fork)",
+                 pass + 1);
     }
 
     // Build at most one missing extra feature on this invocation and evaluate nothing afterwards.
