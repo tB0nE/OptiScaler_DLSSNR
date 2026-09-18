@@ -423,6 +423,8 @@ class Config
     CustomOptional<float> DlssNrPeripheralWarpCenterY { 80.0f };
     CustomOptional<float> DlssNrPeripheralWarpWorkX { 90.0f };
     CustomOptional<float> DlssNrPeripheralWarpWorkY { 90.0f };
+    // 0 = normal; 1 = skip the model and unpack Pack()'s own output (isolates warp geometry from the model).
+    CustomOptional<uint32_t> DlssNrPeripheralWarpDebug { 0 };
 
     // Look for the exposure the game computed but never handed to the upscaler.
     //

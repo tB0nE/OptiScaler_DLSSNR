@@ -2651,8 +2651,12 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         const auto tuning = PassTuning(cfg, pass);
         const bool warpThisPass = warpActive && pass == 0;
 
+        // Debug 1: no model at all -- Pack()'s own output goes straight into Unpack(), so what
+        // shows on screen is purely the warp's geometry round trip.
+        const bool warpRoundTripOnly = warpThisPass && cfg.DlssNrPeripheralWarpDebug.value_or_default() == 1;
+
         MakeModelWritable(passOutput);
-        result = g_nr.evaluate(
+        result = warpRoundTripOnly ? NVSDK_NGX_Result_Success : g_nr.evaluate(
             cmdList, passFeature, g_nr.capabilityParams,
             warpThisPass ? warpedColor : passInput,
             warpThisPass ? warpedDepth : depthIn,
@@ -2684,11 +2688,13 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             // warpUnpackTarget before treating it as finalAnswer, so pass 1+ and every consumer
             // past this loop sees a full workWidth x workHeight answer -- nothing warp-shaped
             // leaks further downstream.
-            MakeModelReadable(passOutput);
+            ID3D12Resource* const warpModelAnswer = warpRoundTripOnly ? warpedColor : passOutput;
+            if (!warpRoundTripOnly)
+                MakeModelReadable(passOutput);
             MakeModelWritable(g_nr.warpUnpackTarget);
 
             const bool unpackOk = DlssNr::PeripheralWarp::Unpack(
-                device, cmdList, passOutput, desc.Format, g_nr.warpUnpackTarget, workWidth,
+                device, cmdList, warpModelAnswer, desc.Format, g_nr.warpUnpackTarget, workWidth,
                 workHeight, desc.Format);
 
             if (!unpackOk)
