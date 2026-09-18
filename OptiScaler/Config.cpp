@@ -347,6 +347,11 @@ bool Config::Reload(std::filesystem::path iniPath)
                 DlssNrScalingDownscaler.reset();
             DlssNrProxyProbe.set_from_config(readBool("DlssNr", "ProxyProbe"));
             DlssNrUseProxy.set_from_config(readBool("DlssNr", "UseProxy"));
+            DlssNrPeripheralWarpEnabled.set_from_config(readBool("DlssNr", "PeripheralWarpEnabled"));
+            DlssNrPeripheralWarpCenterX.set_from_config(readFloat("DlssNr", "PeripheralWarpCenterX"));
+            DlssNrPeripheralWarpCenterY.set_from_config(readFloat("DlssNr", "PeripheralWarpCenterY"));
+            DlssNrPeripheralWarpWorkX.set_from_config(readFloat("DlssNr", "PeripheralWarpWorkX"));
+            DlssNrPeripheralWarpWorkY.set_from_config(readFloat("DlssNr", "PeripheralWarpWorkY"));
             DlssNrScanExposure.set_from_config(readBool("DlssNr", "ScanExposure"));
             DlssNrWhitePointSource.set_from_config(readUInt("DlssNr", "WhitePointSource"));
 
@@ -1278,6 +1283,11 @@ bool Config::SaveIni()
     ini.SetValue("DlssNr", "ScanMeter", GetBoolValue(Instance()->DlssNrScanMeter.value_for_config()).c_str());
     ini.SetValue("DlssNr", "Passes", GetIntValue(Instance()->DlssNrPasses.value_for_config()).c_str());
     ini.SetValue("DlssNr", "UseProxy", GetBoolValue(Instance()->DlssNrUseProxy.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "PeripheralWarpEnabled", GetBoolValue(Instance()->DlssNrPeripheralWarpEnabled.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "PeripheralWarpCenterX", GetFloatValue(Instance()->DlssNrPeripheralWarpCenterX.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "PeripheralWarpCenterY", GetFloatValue(Instance()->DlssNrPeripheralWarpCenterY.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "PeripheralWarpWorkX", GetFloatValue(Instance()->DlssNrPeripheralWarpWorkX.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "PeripheralWarpWorkY", GetFloatValue(Instance()->DlssNrPeripheralWarpWorkY.value_for_config()).c_str());
     ini.SetValue("DlssNr", "ProxyProbe", GetBoolValue(Instance()->DlssNrProxyProbe.value_for_config()).c_str());
     // ScanExposure is a developer override with no menu control; persist it so a set ini keeps it.
     ini.SetValue("DlssNr", "ScanExposure", GetBoolValue(Instance()->DlssNrScanExposure.value_for_config()).c_str());

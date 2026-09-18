@@ -17,6 +17,8 @@
 #include "DlssNr_Guides.h"
 #include "DlssNr_SeamClock.h"
 
+#include <dlssnr/DlssNr_PeripheralWarp.h>
+
 #include <Config.h>
 #include <State.h>
 #include <Util.h>
@@ -234,6 +236,14 @@ struct NrState
     // output (A), pass 1 writes this (B), and pass 2 writes A again. Only the final answer is composed.
     ID3D12Resource* passScratch = nullptr;
     bool passScratchFailed = false;
+
+    // PeripheralWarp's pass-0 reconstruction target (see DlssNr_PeripheralWarp.h): the model's
+    // warped, smaller-than-workWidth answer is Unpack()ed into this before pass 1+ (or the final
+    // resolve) ever sees it, so nothing warp-shaped leaks past pass 0. Deliberately separate from
+    // passScratch -- that buffer is released whenever Passes==1, but warp must keep working on a
+    // single pass.
+    ID3D12Resource* warpUnpackTarget = nullptr;
+    bool warpUnpackTargetFailed = false;
 
     // The frame as the upscaler wrote it. The resolve adds the model's edit to this rather than
     // reconstructing it by inverting the tone curve, which is what turned every light in the frame into
@@ -1864,7 +1874,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             ParkNrResource(g_nr.colorSmall);
             ParkNrResource(g_nr.outputNative);
             ParkNrResource(g_nr.activeColor);
+            ParkNrResource(g_nr.warpUnpackTarget);
             g_nr.passScratchFailed = false;
+            g_nr.warpUnpackTargetFailed = false;
         }
     }
 
@@ -1906,6 +1918,24 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
 
     if (reduced && g_nr.colorSmall == nullptr)
         g_nr.colorSmall = CreateScratch(device, desc.Format, workWidth, workHeight);
+
+    if (!cfg.DlssNrPeripheralWarpEnabled.value_or_default())
+    {
+        // Same reasoning as passScratch above: reclaim promptly on toggle-off, and clear the
+        // failure latch so re-enabling gets one fresh allocation attempt rather than staying
+        // silently disabled from a stale failure.
+        ParkNrResource(g_nr.warpUnpackTarget);
+        g_nr.warpUnpackTargetFailed = false;
+    }
+    else if (g_nr.warpUnpackTarget == nullptr && !g_nr.warpUnpackTargetFailed)
+    {
+        g_nr.warpUnpackTarget = CreateScratch(device, desc.Format, workWidth, workHeight);
+        g_nr.warpUnpackTargetFailed = g_nr.warpUnpackTarget == nullptr;
+
+        if (g_nr.warpUnpackTargetFailed)
+            LOG_ERROR("DLSS-NR: could not allocate the PeripheralWarp reconstruction target; "
+                      "PeripheralWarp is disabled for this session");
+    }
 
     // The down-leg target is native (the answer is brought back to frame size before the resolve).
     if (workScale > 1.0f && g_nr.outputNative == nullptr)
@@ -2553,10 +2583,24 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     ID3D12Resource* finalAnswer = nullptr;
     bool outputReadable = false;
     bool scratchReadable = false;
+    // Separate from scratchReadable: PeripheralWarp's own reconstruction buffer is a third
+    // resource these lambdas can be asked to track, distinct from passScratch (that pointer can
+    // even be null, when Passes==1, while warp is still in play). Without its own bit it would
+    // silently alias passScratch's tracked state on every == g_nr.output check below.
+    bool warpReadable = false;
+
+    const auto TrackedReadableFlag = [&](ID3D12Resource* resource) -> bool&
+    {
+        if (resource == g_nr.output)
+            return outputReadable;
+        if (resource == g_nr.warpUnpackTarget)
+            return warpReadable;
+        return scratchReadable;
+    };
 
     const auto MakeModelReadable = [&](ID3D12Resource* resource)
     {
-        bool& readable = resource == g_nr.output ? outputReadable : scratchReadable;
+        bool& readable = TrackedReadableFlag(resource);
         if (!readable)
         {
             Barrier(cmdList, resource, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -2567,7 +2611,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
 
     const auto MakeModelWritable = [&](ID3D12Resource* resource)
     {
-        bool& readable = resource == g_nr.output ? outputReadable : scratchReadable;
+        bool& readable = TrackedReadableFlag(resource);
         if (readable)
         {
             Barrier(cmdList, resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -2575,6 +2619,27 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             readable = false;
         }
     };
+
+    // PeripheralWarp (native integration of optimizer-fps-dlss5's SDK, see
+    // DlssNr_PeripheralWarp.h): compresses pass 0's color/depth/motion before the model sees
+    // them, at whatever resolution the model is actually evaluating at here (workWidth x
+    // workHeight -- already possibly resampled from the swapchain's own width x height above).
+    // Scope: pass 0 only, matching the header's documented limitation -- pass 1+ (if any) run
+    // completely unaware anything happened, on finalAnswer at full workWidth x workHeight exactly
+    // as the unwarped path has always produced.
+    ID3D12Resource* warpedColor = nullptr;
+    ID3D12Resource* warpedDepth = nullptr;
+    ID3D12Resource* warpedMotion = nullptr;
+    unsigned int warpWidth = 0;
+    unsigned int warpHeight = 0;
+    const bool warpActive = g_nr.warpUnpackTarget != nullptr &&
+        DlssNr::PeripheralWarp::Enabled() &&
+        DlssNr::PeripheralWarp::Pack(
+            device, cmdList, passInput, desc.Format, workWidth, workHeight,
+            depthIn, depthIn->GetDesc().Format, depthBaseX, depthBaseY, guideWidth, guideHeight,
+            motionIn, motionIn->GetDesc().Format, motionBaseX, motionBaseY, motionWidth, motionHeight,
+            g_nr.guideMvScaleX * mvToWorkX, g_nr.guideMvScaleY * mvToWorkY, g_nr.guideDepthInverted,
+            &warpedColor, &warpedDepth, &warpedMotion, &warpWidth, &warpHeight);
 
     int result = NVSDK_NGX_Result_Success;
 
@@ -2584,23 +2649,78 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         void* const passFeature = pass == 0 ? g_nr.feature : g_nr.passFeature[pass];
         const bool passReset = g_nr.reset || (pass > 0 && g_nr.passNeedsReset[pass]);
         const auto tuning = PassTuning(cfg, pass);
+        const bool warpThisPass = warpActive && pass == 0;
 
         MakeModelWritable(passOutput);
         result = g_nr.evaluate(
-            cmdList, passFeature, g_nr.capabilityParams, passInput, depthIn, motionIn, passOutput,
-            workWidth, workHeight, guideWidth, guideHeight, motionWidth, motionHeight,
-            depthBaseX, depthBaseY, motionBaseX, motionBaseY, g_nr.guideDepthInverted ? 1 : 0,
+            cmdList, passFeature, g_nr.capabilityParams,
+            warpThisPass ? warpedColor : passInput,
+            warpThisPass ? warpedDepth : depthIn,
+            warpThisPass ? warpedMotion : motionIn,
+            passOutput,
+            warpThisPass ? warpWidth : workWidth, warpThisPass ? warpHeight : workHeight,
+            warpThisPass ? warpWidth : guideWidth, warpThisPass ? warpHeight : guideHeight,
+            warpThisPass ? warpWidth : motionWidth, warpThisPass ? warpHeight : motionHeight,
+            warpThisPass ? 0u : depthBaseX, warpThisPass ? 0u : depthBaseY,
+            warpThisPass ? 0u : motionBaseX, warpThisPass ? 0u : motionBaseY,
+            g_nr.guideDepthInverted ? 1 : 0,
             passReset ? 1 : 0, tuning.intensity,
             (int) PassStyle(cfg, pass), tuning.structure,
             tuning.tone, tuning.skin,
-            tuning.autoMask ? 1 : 0, g_nr.guideMvScaleX * mvToWorkX,
-            g_nr.guideMvScaleY * mvToWorkY);
+            tuning.autoMask ? 1 : 0,
+            warpThisPass ? 1.0f : g_nr.guideMvScaleX * mvToWorkX,
+            warpThisPass ? 1.0f : g_nr.guideMvScaleY * mvToWorkY);
 
         if (result != NVSDK_NGX_Result_Success)
             break;
 
         if (pass > 0)
             g_nr.passNeedsReset[pass] = false;
+
+        if (warpThisPass)
+        {
+            // The model's answer is still at warpWidth x warpHeight, top-left of passOutput
+            // (g_nr.output, allocated at the larger workWidth x workHeight). Reconstruct it into
+            // warpUnpackTarget before treating it as finalAnswer, so pass 1+ and every consumer
+            // past this loop sees a full workWidth x workHeight answer -- nothing warp-shaped
+            // leaks further downstream.
+            MakeModelReadable(passOutput);
+            MakeModelWritable(g_nr.warpUnpackTarget);
+
+            const bool unpackOk = DlssNr::PeripheralWarp::Unpack(
+                device, cmdList, passOutput, desc.Format, g_nr.warpUnpackTarget, workWidth,
+                workHeight, desc.Format);
+
+            if (!unpackOk)
+            {
+                g_nr.failed = true;
+                g_nr.reason = "PeripheralWarp: could not reconstruct the model's answer back to "
+                              "full resolution";
+                LOG_ERROR("DLSS-NR: {}", g_nr.reason);
+                // Leaving early, below the loop's own end-of-frame cleanup: restore what this
+                // pass already made readable back to the UAV state the next frame expects to
+                // find it in (see the matching restore after the loop, for the same reason).
+                MakeModelWritable(passOutput);
+                MakeModelWritable(g_nr.warpUnpackTarget);
+                FinishColor(false);
+                device->Release();
+                return;
+            }
+
+            finalAnswer = g_nr.warpUnpackTarget;
+            MakeModelReadable(finalAnswer);
+
+            if (pass + 1 < effectivePasses)
+            {
+                passInput = finalAnswer;
+                // Pass 1 must not write into warpUnpackTarget (it belongs to warp's own
+                // reconstruction, not the ordinary ping-pong) -- g_nr.output is free again since
+                // its warped answer has already been consumed above.
+                passOutput = g_nr.output;
+            }
+
+            continue;
+        }
 
         finalAnswer = passOutput;
         MakeModelReadable(finalAnswer);
@@ -2821,6 +2941,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         MakeModelWritable(g_nr.output);
         if (g_nr.passScratch != nullptr)
             MakeModelWritable(g_nr.passScratch);
+        if (g_nr.warpUnpackTarget != nullptr)
+            MakeModelWritable(g_nr.warpUnpackTarget);
 
         if (superDownOk)
             Barrier(cmdList, g_nr.outputNative, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -2853,11 +2975,14 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                   NgxResultName((unsigned int) result));
     }
 
-    // On an evaluation failure, intermediate A/B inputs may still be readable. Restore both persistent
-    // ping-pong surfaces to the UAV state the next frame starts from.
+    // On an evaluation failure, intermediate A/B inputs may still be readable. Restore all
+    // persistent surfaces (the ping-pong pair, and PeripheralWarp's reconstruction target) to the
+    // UAV state the next frame starts from.
     MakeModelWritable(g_nr.output);
     if (g_nr.passScratch != nullptr)
         MakeModelWritable(g_nr.passScratch);
+    if (g_nr.warpUnpackTarget != nullptr)
+        MakeModelWritable(g_nr.warpUnpackTarget);
 
     Barrier(cmdList, g_nr.hdrCopy, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -3495,6 +3620,15 @@ void Shutdown()
         g_nr.passScratch->Release();
         g_nr.passScratch = nullptr;
     }
+
+    if (g_nr.warpUnpackTarget != nullptr)
+    {
+        g_nr.warpUnpackTarget->Release();
+        g_nr.warpUnpackTarget = nullptr;
+    }
+
+    g_nr.warpUnpackTargetFailed = false;
+    DlssNr::PeripheralWarp::Shutdown();
     g_nr.passScratchFailed = false;
 
     if (g_nr.colorCopy != nullptr)

@@ -415,6 +415,15 @@ class Config
     // Off until it is shown to produce the same picture. If it does, the forwarder can go.
     CustomOptional<bool> DlssNrUseProxy { false };
 
+    // PeripheralWarp (from optimizer-fps-dlss5, MIT-licensed): compresses the periphery of the
+    // frame the model sees before evaluate, native 1:1 in the centre. Off by default -- pass 0
+    // only for now, native-resolution NR is the fallback on any Pack/Unpack failure.
+    CustomOptional<bool> DlssNrPeripheralWarpEnabled { false };
+    CustomOptional<float> DlssNrPeripheralWarpCenterX { 80.0f };
+    CustomOptional<float> DlssNrPeripheralWarpCenterY { 80.0f };
+    CustomOptional<float> DlssNrPeripheralWarpWorkX { 90.0f };
+    CustomOptional<float> DlssNrPeripheralWarpWorkY { 90.0f };
+
     // Look for the exposure the game computed but never handed to the upscaler.
     //
     // Off by default, and it has to be. Reading a resource the game owns means assuming what state
