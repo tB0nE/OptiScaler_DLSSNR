@@ -270,9 +270,9 @@ bool Pack(
     sources.motion = { motion, motionFormat };
     sources.confidence = { nullptr, DXGI_FORMAT_UNKNOWN };
 
-    // color/depth/motion must already be SRV-readable here: the caller only reaches this point
-    // after its own ReadableGuide()/barrier handling has put them in that state for its own
-    // (unwarped) evaluate path, which runs unconditionally before Pack() is ever considered.
+    // color/depth/motion arrive in NON_PIXEL_SHADER_RESOURCE (what this fork's compute path and
+    // the model read them in). Pack's draw is a pixel shader, which may only read
+    // PIXEL_SHADER_RESOURCE, so they are switched for the draw and restored right after.
     if (g_state.adapter.WriteSourceDescriptorsV2(0, sources, description) != pw::AdapterStatus::Ok)
         return false;
 
@@ -303,7 +303,25 @@ bool Pack(
     toRt[2].Transition.pResource = packed.resources.motion.resource;
     cmdList->ResourceBarrier(3, toRt);
 
+    D3D12_RESOURCE_BARRIER srcToPixel[3] {};
+    for (auto& b : srcToPixel)
+    {
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        b.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    }
+    srcToPixel[0].Transition.pResource = color;
+    srcToPixel[1].Transition.pResource = depth;
+    srcToPixel[2].Transition.pResource = motion;
+    cmdList->ResourceBarrier(3, srcToPixel);
+
     const auto packStatus = g_state.adapter.RecordPack(cmdList, 0);
+
+    D3D12_RESOURCE_BARRIER srcBack[3] { srcToPixel[0], srcToPixel[1], srcToPixel[2] };
+    for (auto& b : srcBack)
+        std::swap(b.Transition.StateBefore, b.Transition.StateAfter);
+    cmdList->ResourceBarrier(3, srcBack);
 
     D3D12_RESOURCE_BARRIER toSrv[3] { toRt[0], toRt[1], toRt[2] };
     for (auto& b : toSrv)
