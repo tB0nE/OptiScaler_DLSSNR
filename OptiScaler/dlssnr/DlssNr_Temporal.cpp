@@ -76,7 +76,7 @@ pwtemporal::FrameInputs Make(const FrameArgs& a)
 {
     pwtemporal::FrameInputs t;
     t.base = a.base;
-    t.baseState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    t.baseState = a.baseState;
     t.color = a.base;
     t.colorRect = { 0, 0, a.frameW, a.frameH };
     t.motion = a.motion;
@@ -88,8 +88,17 @@ pwtemporal::FrameInputs Make(const FrameArgs& a)
     t.mvScaleX = a.mvScaleX;
     t.mvScaleY = a.mvScaleY;
     t.depthInverted = a.depthInverted;
-    t.hostInputState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-    t.depthState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    t.hostInputState = a.motionState;
+    t.depthState = a.depthState;
+    t.residualBlend = a.residualBlend;
+    t.blendFromMotion = a.blendFromMotion;
+    t.motionIsPassChain = a.motionIsChain;
+    if (a.motionIsChain)
+    {
+        t.mvScaleX = 1.0f;
+        t.mvScaleY = 1.0f;
+        t.motionSign = 1.0f;
+    }
     t.depthSubresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
 
     const auto& cfg = *Config::Instance();
@@ -106,10 +115,11 @@ pwtemporal::FrameInputs Make(const FrameArgs& a)
 
 bool Enabled() { return Config::Instance()->DlssNrTemporalEnabled.value_or_default(); }
 
-bool Plan(ID3D12Device* device, unsigned int frameW, unsigned int frameH, DXGI_FORMAT format,
-          ID3D12Resource* motion, ID3D12Resource* depth, bool reset, bool* interpolate)
+bool EnsureMachine(ID3D12Device* device, unsigned int frameW, unsigned int frameH, DXGI_FORMAT format,
+                   ID3D12Resource* motion, ID3D12Resource* depth, bool* created)
 {
-    *interpolate = false;
+    if (created != nullptr)
+        *created = false;
 
     for (auto& r : g_retired)
         --r.framesLeft;
@@ -117,7 +127,7 @@ bool Plan(ID3D12Device* device, unsigned int frameW, unsigned int frameH, DXGI_F
                                    [](const Retired& r) { return r.framesLeft <= 0; }),
                     g_retired.end());
 
-    if (!Enabled() || g_failed || device == nullptr || motion == nullptr || depth == nullptr)
+    if (g_failed || device == nullptr || motion == nullptr || depth == nullptr)
         return false;
 
     const D3D12_RESOURCE_DESC md = motion->GetDesc();
@@ -129,33 +139,47 @@ bool Plan(ID3D12Device* device, unsigned int frameW, unsigned int frameH, DXGI_F
         return false;
     }
 
-    if (!g_machine || !g_machine->Matches(frameW, frameH, format, (unsigned int) md.Width, md.Height, dd.Format,
-                                          (unsigned int) dd.Width, dd.Height))
+    if (g_machine && g_machine->Matches(frameW, frameH, format, (unsigned int) md.Width, md.Height, dd.Format,
+                                        (unsigned int) dd.Width, dd.Height))
+        return true;
+
+    if (g_machine)
     {
-        if (g_machine)
-        {
-            // The old machine's textures may still be in flight.
-            Retired old;
-            old.machine = std::move(g_machine);
-            g_retired.push_back(std::move(old));
-        }
-
-        auto machine = std::make_unique<pwtemporal::Machine>();
-        char error[256] = {};
-
-        if (!machine->Initialize(device, g_shaders, frameW, frameH, format, format, (unsigned int) md.Width,
-                                 md.Height, dd.Format, (unsigned int) dd.Width, dd.Height, error, sizeof(error)))
-        {
-            LOG_ERROR("DLSS-NR temporal: could not start ({})", error);
-            g_failed = true;
-            return false;
-        }
-
-        g_machine = std::move(machine);
-        g_sinceFull = 0;
-        LOG_INFO("DLSS-NR temporal: machine ready (frame {}x{}, motion {}x{}, depth {}x{} fmt {})", frameW, frameH,
-                 (unsigned int) md.Width, md.Height, (unsigned int) dd.Width, dd.Height, (int) dd.Format);
+        // The old machine's textures may still be in flight.
+        Retired old;
+        old.machine = std::move(g_machine);
+        g_retired.push_back(std::move(old));
     }
+
+    auto machine = std::make_unique<pwtemporal::Machine>();
+    char error[256] = {};
+
+    if (!machine->Initialize(device, g_shaders, frameW, frameH, format, format, (unsigned int) md.Width, md.Height,
+                             dd.Format, (unsigned int) dd.Width, dd.Height, error, sizeof(error)))
+    {
+        LOG_ERROR("DLSS-NR temporal: could not start ({})", error);
+        g_failed = true;
+        return false;
+    }
+
+    g_machine = std::move(machine);
+    g_sinceFull = 0;
+
+    if (created != nullptr)
+        *created = true;
+
+    LOG_INFO("DLSS-NR temporal: machine ready (frame {}x{}, motion {}x{}, depth {}x{} fmt {})", frameW, frameH,
+             (unsigned int) md.Width, md.Height, (unsigned int) dd.Width, dd.Height, (int) dd.Format);
+    return true;
+}
+
+bool Plan(ID3D12Device* device, unsigned int frameW, unsigned int frameH, DXGI_FORMAT format,
+          ID3D12Resource* motion, ID3D12Resource* depth, bool reset, bool* interpolate)
+{
+    *interpolate = false;
+
+    if (!Enabled() || !EnsureMachine(device, frameW, frameH, format, motion, depth, nullptr))
+        return false;
 
     if (reset)
     {
@@ -167,6 +191,35 @@ bool Plan(ID3D12Device* device, unsigned int frameW, unsigned int frameH, DXGI_F
     const bool full = !g_machine->HasResidual() || reset || g_sinceFull >= every - 1;
     *interpolate = !full;
     return true;
+}
+
+bool HasResidual() { return g_machine && g_machine->HasResidual(); }
+void Invalidate()
+{
+    if (g_machine)
+        g_machine->Invalidate();
+}
+bool PendingValid() { return g_machine && g_machine->PendingValid(); }
+bool PendingMirrorsAcc() { return g_machine && g_machine->PendingMirrorsAcc(); }
+void ResetPending()
+{
+    if (g_machine)
+        g_machine->ResetPending();
+}
+void PromotePending()
+{
+    if (g_machine)
+        g_machine->PromotePending();
+}
+void AccumulatePending(ID3D12GraphicsCommandList* cmd, const FrameArgs& args)
+{
+    if (g_machine)
+        g_machine->RecordAccumulatePending(cmd, Make(args));
+}
+void CopyAcc(ID3D12GraphicsCommandList* cmd, bool pending, ID3D12Resource* dst, D3D12_RESOURCE_STATES dstState)
+{
+    if (g_machine)
+        g_machine->RecordCopyAcc(cmd, pending, dst, dstState);
 }
 
 void Accumulate(ID3D12GraphicsCommandList* cmd, const FrameArgs& args)

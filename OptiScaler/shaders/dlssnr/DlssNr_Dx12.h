@@ -78,6 +78,11 @@ class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
     // Records one pass. Resources that a given mode does not read may be null; a stand-in is bound in
     // their place so every descriptor in the table is valid.
     // One compute pass. The public entry below drives three of these plus the model.
+    // Background temporal mode (see Config DlssNrTemporalBackground). True = this frame was handled.
+    bool AsyncDispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* colour, ID3D12Resource* depth,
+                       ID3D12Resource* motion, ID3D12Resource* output, const DlssNrFrameInfo& frame,
+                       ID3D12CommandQueue* timingQueue);
+
     bool DispatchPass(ID3D12GraphicsCommandList* InCmdList, const DlssNrConstants& InConstants,
                   ID3D12Resource* InSource, ID3D12Resource* InModel, ID3D12Resource* InOriginal,
                   ID3D12Resource* InMotion,

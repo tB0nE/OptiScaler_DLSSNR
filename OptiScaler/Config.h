@@ -430,6 +430,10 @@ class Config
     // reprojected along the game's motion vectors. After-SR placement only.
     CustomOptional<bool> DlssNrTemporalEnabled { false };
     CustomOptional<uint32_t> DlssNrTemporalEvery { 2 };
+    // The model runs on its own GPU queue against private copies of the frame, a few frames behind;
+    // every displayed frame is the game's frame plus the last finished pass's edit, reprojected.
+    // Evens out frame times. Needs TemporalEnabled; falls back to the synchronous mode on any failure.
+    CustomOptional<bool> DlssNrTemporalBackground { false };
     // Tuning of the reprojection (see the menu). Catmull-Rom sampling can overshoot around very
     // bright edges, so it is off by default here.
     CustomOptional<bool> DlssNrTemporalCatmullRom { false };

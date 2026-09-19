@@ -25,9 +25,32 @@ struct FrameArgs
     float mvScaleX = 1.0f, mvScaleY = 1.0f; // raw motion -> full-frame pixels
     bool depthInverted = false;
     unsigned int frameW = 0, frameH = 0;
+
+    // Resting states and blending, for a residual computed from a pass's own (older) inputs.
+    D3D12_RESOURCE_STATES baseState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    D3D12_RESOURCE_STATES motionState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    D3D12_RESOURCE_STATES depthState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    bool motionIsChain = false; // motion is the displacement to the previous pass's frame (scale 1)
+    float residualBlend = 0.0f;
+    bool blendFromMotion = false;
 };
 
 bool Enabled();
+
+// Creates or re-creates the machine for these inputs. *created is set when it was (re)built, which
+// invalidates anything computed against the old one.
+bool EnsureMachine(ID3D12Device* device, unsigned int frameW, unsigned int frameH, DXGI_FORMAT format,
+                   ID3D12Resource* motion, ID3D12Resource* depth, bool* created);
+
+// Background mode: the machine's residual protocol (see the machine's header).
+bool HasResidual();
+void Invalidate();
+bool PendingValid();
+bool PendingMirrorsAcc();
+void ResetPending();
+void PromotePending();
+void AccumulatePending(ID3D12GraphicsCommandList* cmd, const FrameArgs& args);
+void CopyAcc(ID3D12GraphicsCommandList* cmd, bool pending, ID3D12Resource* dst, D3D12_RESOURCE_STATES dstState);
 
 // Decides this frame. False = temporal is unavailable right now (run the model normally).
 // On true, *interpolate says whether this frame skips the model.

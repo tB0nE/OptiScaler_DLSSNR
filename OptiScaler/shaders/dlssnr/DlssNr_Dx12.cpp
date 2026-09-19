@@ -29,6 +29,8 @@
 #include <gpu_time/GpuTime_Dx12.h>
 
 #include <mutex>
+#include <memory>
+#include <wrl/client.h>
 #include <algorithm>
 #include <cstring>
 #include "precompile/DlssNr_Shader.h"
@@ -373,6 +375,15 @@ struct NrState
     ID3D12Resource* depthClone = nullptr;
     ID3D12Resource* motionClone = nullptr;
 
+    // The background mode's game-facing frames read the game's guides through their own clones: the
+    // pass on the background queue owns depthClone/motionClone.
+    ID3D12Resource* hostDepthClone = nullptr;
+    ID3D12Resource* hostMotionClone = nullptr;
+
+    // The guides the last pass actually read (its clones, or its private copies).
+    ID3D12Resource* lastDepthIn = nullptr;
+    ID3D12Resource* lastMotionIn = nullptr;
+
     // The constant-depth probe's surface. Separate from depthClone on purpose: it is defined by
     // never having been written, and sharing a surface with a mode that writes would destroy that.
     ID3D12Resource* depthConstant = nullptr;
@@ -413,6 +424,122 @@ struct NrState
 };
 
 NrState g_nr;
+
+// ---------------------------------------------------------------------------------------------
+// Background temporal mode. The model runs on its own queue against private copies of the frame, a
+// few frames behind; the game's own frames only reproject the last finished result. The DLSS-NR
+// dispatch itself is reused unchanged: it is recorded onto a list of ours, with private copies as
+// its target and guides, and submitted to the background queue once the game's queue has executed
+// the list that made the copies.
+// ---------------------------------------------------------------------------------------------
+constexpr unsigned int kAsyncSlots = 3;
+constexpr unsigned int kAsyncMaxAge = 8;
+
+struct AsyncJob
+{
+    ID3D12Device* device = nullptr;
+    ID3D12CommandQueue* hostQueue = nullptr;
+    ID3D12CommandQueue* queue = nullptr;
+    ID3D12Fence* fInputs = nullptr;
+    ID3D12Fence* fModel = nullptr;
+    HANDLE event = nullptr;
+    ID3D12CommandAllocator* alloc[kAsyncSlots] = {};
+    ID3D12GraphicsCommandList* list[kAsyncSlots] = {};
+    unsigned long long slotJob[kAsyncSlots] = {};
+
+    ID3D12Resource* tgt = nullptr;      // the pass's private target (a copy of the game's frame; the result lands here)
+    ID3D12Resource* depth = nullptr;    // private copies of the game's guides
+    ID3D12Resource* motion = nullptr;
+    ID3D12Resource* acc = nullptr;      // the machine's accumulated displacement, as the model's motion
+    ID3D12Resource* exposure = nullptr; // the game's exposure value, copied through the meter pass
+    D3D12_RESOURCE_STATES tgtState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES depthState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES motionState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES accState = D3D12_RESOURCE_STATE_COMMON;
+    bool exposureReadable = false;
+    bool exposureValid = false;
+    D3D12_RESOURCE_DESC tgtDesc {}, depthDesc {}, motionDesc {};
+
+    DlssNr::Temporal::FrameArgs kick; // the kick frame's rects and scales, for the residual
+    bool mvIsAcc = false;
+    unsigned long long jobId = 0;
+    bool inflight = false;
+    bool discard = false;
+    bool signalPending = false;
+    bool hasResult = false;
+    unsigned int sinceKick = 1000;
+    unsigned int age = 0;
+    unsigned long long passes = 0;
+    unsigned long long forcedWaits = 0;
+    unsigned long long ageSum = 0;
+
+    // Lets the pass in flight finish (CPU wait, 3 s cap).
+    void Settle()
+    {
+        if (queue == nullptr || fModel == nullptr)
+            return;
+
+        if (signalPending && hostQueue != nullptr && fInputs != nullptr)
+        {
+            hostQueue->Signal(fInputs, jobId);
+            signalPending = false;
+        }
+
+        if (inflight && fModel->GetCompletedValue() < jobId && event != nullptr)
+        {
+            ResetEvent(event);
+
+            if (SUCCEEDED(fModel->SetEventOnCompletion(jobId, event)) &&
+                WaitForSingleObject(event, 3000) != WAIT_OBJECT_0)
+                LOG_ERROR("DLSS-NR background: pass {} did not finish within 3 s", jobId);
+        }
+
+        inflight = false;
+    }
+
+    ~AsyncJob()
+    {
+        Settle();
+
+        // A pass that never finished may still be reading these; leaking them is safer than a lost device.
+        if (fModel != nullptr && fModel->GetCompletedValue() < jobId)
+            return;
+
+        for (auto& l : list)
+            if (l != nullptr)
+                l->Release();
+
+        for (auto& al : alloc)
+            if (al != nullptr)
+                al->Release();
+
+        for (ID3D12Resource* r : { tgt, depth, motion, acc, exposure })
+            if (r != nullptr)
+                r->Release();
+
+        if (fInputs != nullptr)
+            fInputs->Release();
+
+        if (fModel != nullptr)
+            fModel->Release();
+
+        if (event != nullptr)
+            CloseHandle(event);
+
+        if (queue != nullptr)
+            queue->Release();
+
+        if (hostQueue != nullptr)
+            hostQueue->Release();
+
+        if (device != nullptr)
+            device->Release();
+    }
+};
+
+std::unique_ptr<AsyncJob> g_async;
+bool g_asyncFailed = false;
+bool g_inAsyncKick = false;
 std::unique_ptr<DlssNr_Dx12> g_compose;
 
 // What the pass costs on the GPU, for the breakdown in the overlay.
@@ -1660,6 +1787,481 @@ DlssNr_Dx12::~DlssNr_Dx12()
 
 
 
+// Creates (or re-creates) the background job for these resources. Null on failure.
+AsyncJob* EnsureAsyncJob(ID3D12Device* device, ID3D12CommandQueue* hostQueue, const D3D12_RESOURCE_DESC& tgtDesc,
+                         const D3D12_RESOURCE_DESC& depthDesc, const D3D12_RESOURCE_DESC& motionDesc)
+{
+    const auto same = [](const D3D12_RESOURCE_DESC& a, const D3D12_RESOURCE_DESC& b)
+    { return a.Width == b.Width && a.Height == b.Height && a.Format == b.Format; };
+
+    if (g_async && g_async->hostQueue == hostQueue && same(tgtDesc, g_async->tgtDesc) &&
+        same(depthDesc, g_async->depthDesc) && same(motionDesc, g_async->motionDesc))
+        return g_async.get();
+
+    g_async.reset(); // settles the pass in flight
+
+    auto job = std::make_unique<AsyncJob>();
+    job->device = device;
+    device->AddRef();
+    job->hostQueue = hostQueue;
+    hostQueue->AddRef();
+    job->tgtDesc = tgtDesc;
+    job->depthDesc = depthDesc;
+    job->motionDesc = motionDesc;
+
+    D3D12_COMMAND_QUEUE_DESC qd {};
+    qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+    qd.Priority = D3D12_COMMAND_QUEUE_PRIORITY_HIGH;
+
+    if (FAILED(device->CreateCommandQueue(&qd, IID_PPV_ARGS(&job->queue))) ||
+        FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&job->fInputs))) ||
+        FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&job->fModel))))
+        return nullptr;
+
+    job->event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+
+    if (job->event == nullptr)
+        return nullptr;
+
+    for (unsigned int i = 0; i < kAsyncSlots; ++i)
+    {
+        if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&job->alloc[i]))) ||
+            FAILED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, job->alloc[i], nullptr,
+                                             IID_PPV_ARGS(&job->list[i]))))
+            return nullptr;
+
+        job->list[i]->Close();
+    }
+
+    D3D12_HEAP_PROPERTIES heap {};
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    const auto make = [&](D3D12_RESOURCE_DESC d, D3D12_RESOURCE_FLAGS flags, ID3D12Resource** out)
+    {
+        d.Alignment = 0;
+        d.Flags = flags;
+        return SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &d,
+                                                         D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(out)));
+    };
+
+    D3D12_RESOURCE_DESC accDesc = motionDesc;
+    accDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
+
+    if (!make(tgtDesc, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, &job->tgt) ||
+        !make(depthDesc, depthDesc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, &job->depth) ||
+        !make(motionDesc, D3D12_RESOURCE_FLAG_NONE, &job->motion) ||
+        !make(accDesc, D3D12_RESOURCE_FLAG_NONE, &job->acc))
+        return nullptr;
+
+    job->exposure = CreateScratch(device, DXGI_FORMAT_R32_FLOAT, 1, 1);
+
+    if (job->exposure == nullptr)
+        return nullptr;
+
+    LOG_INFO("DLSS-NR background: queue ready (frame {}x{})", (unsigned int) tgtDesc.Width, tgtDesc.Height);
+    g_async = std::move(job);
+    return g_async.get();
+}
+
+bool DlssNr_Dx12::AsyncDispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* colour,
+                                ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* output,
+                                const DlssNrFrameInfo& frame, ID3D12CommandQueue* timingQueue)
+{
+    (void) colour;
+    (void) timingQueue;
+    const Config& cfg = *Config::Instance();
+
+    if (g_asyncFailed || g_nr.failed || !cfg.DlssNrTemporalEnabled.value_or_default() ||
+        !cfg.DlssNrTemporalBackground.value_or_default() || frame.BeforeUpscale ||
+        cfg.DlssNrUseProxy.value_or_default() || cmdList == nullptr || depth == nullptr || motion == nullptr ||
+        output == nullptr)
+        return false;
+
+    if (cmdList->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT)
+        return false;
+
+    ID3D12CommandQueue* const hostQueue = (ID3D12CommandQueue*) State::Instance().currentCommandQueue;
+
+    if (hostQueue == nullptr)
+        return false;
+
+    const bool restoreRequired = cfg.RestoreComputeSignature.value_or_default() ||
+                                 cfg.RestoreGraphicSignature.value_or_default();
+
+    if (restoreRequired && !frame.IndependentCommands && !D3D12Hooks::CanRestoreRootSignature(cmdList))
+        return false;
+
+    ID3D12Resource* const target = output;
+    Microsoft::WRL::ComPtr<ID3D12Device> device;
+
+    if (FAILED(target->GetDevice(IID_PPV_ARGS(&device))) || device == nullptr)
+        return false;
+
+    const D3D12_RESOURCE_DESC desc = target->GetDesc();
+    const DXGI_FORMAT tf = desc.Format;
+    const bool typedColour = tf == DXGI_FORMAT_R16G16B16A16_FLOAT || tf == DXGI_FORMAT_R11G11B10_FLOAT ||
+                             tf == DXGI_FORMAT_R10G10B10A2_UNORM || tf == DXGI_FORMAT_R8G8B8A8_UNORM ||
+                             tf == DXGI_FORMAT_B8G8R8A8_UNORM || tf == DXGI_FORMAT_R32G32B32A32_FLOAT;
+
+    if (!typedColour || (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) == 0)
+        return false;
+
+    const unsigned int width = (unsigned int) desc.Width;
+    const unsigned int height = desc.Height;
+    const auto guideDesc = depth->GetDesc();
+    const auto motionDesc = motion->GetDesc();
+    const auto guides = DlssNr::ResolveGuideRegions(
+        { (unsigned int) guideDesc.Width, guideDesc.Height },
+        { (unsigned int) motionDesc.Width, motionDesc.Height },
+        { frame.RenderSubrectWidth, frame.RenderSubrectHeight },
+        { frame.OutputWidth, frame.OutputHeight }, frame.MotionVectorsLowResolution,
+        frame.DepthSubrectBaseX, frame.DepthSubrectBaseY,
+        frame.MotionSubrectBaseX, frame.MotionSubrectBaseY);
+
+    if (!guides.depth.valid() || !guides.motion.valid())
+        return false;
+
+    AsyncJob* const a = EnsureAsyncJob(device.Get(), hostQueue, desc, guideDesc, motionDesc);
+
+    if (a == nullptr)
+    {
+        g_asyncFailed = true;
+        LOG_ERROR("DLSS-NR background: could not create the queue or its private copies; using the "
+                  "synchronous temporal mode");
+        return false;
+    }
+
+    // ---- everything below records into the game's list ----
+    const D3D12_RESOURCE_STATES outputArrival =
+        Config::Instance()->OutputResourceBarrier.has_value()
+            ? (D3D12_RESOURCE_STATES) Config::Instance()->OutputResourceBarrier.value()
+            : D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    D3D12_RESOURCE_STATES targetState = outputArrival;
+    const auto TransitionTarget = [&](D3D12_RESOURCE_STATES to)
+    {
+        Barrier(cmdList, target, targetState, to);
+        targetState = to;
+    };
+
+    // The game's guides, readable, through clones of our own (the background pass owns the others).
+    ID3D12Resource* depthIn = ReadableGuide(device.Get(), cmdList, depth, &g_nr.hostDepthClone);
+    ID3D12Resource* motionIn = ReadableGuide(device.Get(), cmdList, motion, &g_nr.hostMotionClone);
+
+    const auto RestoreHostClones = [&]()
+    {
+        if (g_nr.hostDepthClone != nullptr && depthIn == g_nr.hostDepthClone)
+            Barrier(cmdList, g_nr.hostDepthClone, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_RESOURCE_STATE_COPY_DEST);
+
+        if (g_nr.hostMotionClone != nullptr && motionIn == g_nr.hostMotionClone)
+            Barrier(cmdList, g_nr.hostMotionClone, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_RESOURCE_STATE_COPY_DEST);
+    };
+
+    if (depthIn == nullptr || motionIn == nullptr)
+    {
+        // Nothing was recorded that needs undoing (a failed clone made no state change we rely on).
+        g_asyncFailed = true;
+        LOG_ERROR("DLSS-NR background: the game's guides could not be made readable; using the "
+                  "synchronous temporal mode");
+        return false;
+    }
+
+    bool machineCreated = false;
+
+    if (!DlssNr::Temporal::EnsureMachine(device.Get(), width, height, tf, motionIn, depthIn, &machineCreated))
+    {
+        RestoreHostClones();
+        g_asyncFailed = true;
+        LOG_ERROR("DLSS-NR background: the reprojection machine could not start; using the synchronous "
+                  "temporal mode");
+        return false;
+    }
+
+    if (machineCreated)
+    {
+        a->discard = a->inflight;
+        a->sinceKick = 1000;
+    }
+
+    DlssNr::Temporal::FrameArgs host;
+    host.base = target;
+    host.baseState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    host.motion = motionIn;
+    host.motionView = motionIn->GetDesc().Format;
+    host.motionX = guides.motion.x;
+    host.motionY = guides.motion.y;
+    host.motionW = guides.motion.width;
+    host.motionH = guides.motion.height;
+    host.depth = depthIn;
+    host.depthView = depthIn->GetDesc().Format;
+    host.depthX = guides.depth.x;
+    host.depthY = guides.depth.y;
+    host.depthW = guides.depth.width;
+    host.depthH = guides.depth.height;
+    host.mvScaleX = frame.MvScaleX;
+    host.mvScaleY = frame.MvScaleY;
+    host.depthInverted = frame.DepthInverted;
+    host.frameW = width;
+    host.frameH = height;
+
+    // The previous frame's kick list has been submitted by now: release the background pass that waits on it.
+    if (a->signalPending)
+    {
+        hostQueue->Signal(a->fInputs, a->jobId);
+        a->signalPending = false;
+    }
+
+    if (frame.Reset)
+    {
+        DlssNr::Temporal::Invalidate();
+
+        if (a->inflight)
+            a->discard = true;
+    }
+
+    const unsigned int every = std::clamp(cfg.DlssNrTemporalEvery.value_or_default(), 2u, 8u);
+    bool willKick = false;
+
+    {
+        ScopedNrStateEnvelope envelope(cmdList);
+        TransitionTarget(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+        DlssNr::ExposureScan::Tick(device.Get(), cmdList);
+
+        // 1. Motion since the last adopted frame, and since the last kick (the model's history is that old).
+        if (DlssNr::Temporal::HasResidual())
+            DlssNr::Temporal::Accumulate(cmdList, host);
+
+        if (a->jobId > 0 && !DlssNr::Temporal::PendingMirrorsAcc())
+            DlssNr::Temporal::AccumulatePending(cmdList, host);
+
+        // 2. Adopt the finished pass, or wait for one that has run too long.
+        bool ready = a->inflight && a->fModel->GetCompletedValue() >= a->jobId;
+
+        if (!ready && a->inflight && a->age >= kAsyncMaxAge)
+        {
+            if (a->signalPending)
+            {
+                hostQueue->Signal(a->fInputs, a->jobId);
+                a->signalPending = false;
+            }
+
+            ResetEvent(a->event);
+
+            if (SUCCEEDED(a->fModel->SetEventOnCompletion(a->jobId, a->event)))
+                WaitForSingleObject(a->event, 3000);
+
+            ready = a->fModel->GetCompletedValue() >= a->jobId;
+            ++a->forcedWaits;
+
+            if (!ready)
+            {
+                g_asyncFailed = true;
+                LOG_ERROR("DLSS-NR background: a pass did not finish within 3 s; using the synchronous "
+                          "temporal mode from now on");
+            }
+        }
+
+        if (ready)
+        {
+            if (!a->discard && a->hasResult && g_nr.hdrCopy != nullptr && g_nr.lastDepthIn != nullptr &&
+                g_nr.lastMotionIn != nullptr)
+            {
+                const auto rest = [](ID3D12Resource* r, ID3D12Resource* clone)
+                {
+                    return r == clone ? D3D12_RESOURCE_STATE_COPY_DEST
+                                      : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                };
+
+                DlssNr::Temporal::FrameArgs adopt = a->kick;
+                adopt.base = g_nr.hdrCopy;
+                adopt.baseState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+                adopt.motion = g_nr.lastMotionIn;
+                adopt.motionView = g_nr.lastMotionIn->GetDesc().Format;
+                adopt.motionState = rest(g_nr.lastMotionIn, g_nr.motionClone);
+                adopt.depth = g_nr.lastDepthIn;
+                adopt.depthView = g_nr.lastDepthIn->GetDesc().Format;
+                adopt.depthState = rest(g_nr.lastDepthIn, g_nr.depthClone);
+                adopt.motionIsChain = a->mvIsAcc;
+                adopt.residualBlend = a->mvIsAcc ? 0.6f : 0.0f;
+                adopt.blendFromMotion = true;
+
+                DlssNr::Temporal::Residual(cmdList, adopt, a->tgt, a->tgtState);
+                DlssNr::Temporal::PromotePending();
+
+                ++a->passes;
+                a->ageSum += a->age;
+
+                if (a->passes <= 3 || a->passes % 60 == 0)
+                    LOG_INFO("DLSS-NR background: pass {} adopted (age {} frames, average {:.1f}, forced waits {})",
+                             a->passes, a->age, (double) a->ageSum / (double) a->passes, a->forcedWaits);
+
+                a->age = 0;
+            }
+            else
+            {
+                a->discard = false;
+                DlssNr::Temporal::ResetPending();
+            }
+
+            a->inflight = false;
+        }
+
+        // 3. The next pass, when it is due: the game's exposure value goes into a private texture here.
+        willKick = !g_asyncFailed && !a->inflight && a->sinceKick >= every;
+
+        a->exposureValid = false;
+
+        if (willKick && frame.ExposureTexture != nullptr && cfg.DlssNrWhitePointSource.value_or_default() == 1)
+        {
+            ID3D12Resource* const expo = (ID3D12Resource*) frame.ExposureTexture;
+            DlssNrConstants meter {};
+            meter.Mode = DlssNrMode_Meter;
+            meter.Width = 1;
+            meter.Height = 1;
+
+            if (a->exposureReadable)
+                Barrier(cmdList, a->exposure, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+            DispatchPass(cmdList, meter, expo, nullptr, nullptr, expo, nullptr, a->exposure, nullptr);
+            Barrier(cmdList, a->exposure, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            a->exposureReadable = true;
+            a->exposureValid = true;
+        }
+    }
+
+    if (willKick)
+    {
+        const unsigned long long nextJob = a->jobId + 1;
+        const unsigned int slot = (unsigned int) (nextJob % kAsyncSlots);
+
+        if (a->fModel->GetCompletedValue() < a->slotJob[slot])
+        {
+            ResetEvent(a->event);
+
+            if (SUCCEEDED(a->fModel->SetEventOnCompletion(a->slotJob[slot], a->event)))
+                WaitForSingleObject(a->event, 3000);
+        }
+
+        const auto Copy = [&](ID3D12Resource* src, D3D12_RESOURCE_STATES srcState, ID3D12Resource* dst,
+                              D3D12_RESOURCE_STATES& dstTracked, D3D12_RESOURCE_STATES dstRest)
+        {
+            Barrier(cmdList, src, srcState, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            Barrier(cmdList, dst, dstTracked, D3D12_RESOURCE_STATE_COPY_DEST);
+            cmdList->CopyResource(dst, src);
+            Barrier(cmdList, dst, D3D12_RESOURCE_STATE_COPY_DEST, dstRest);
+            dstTracked = dstRest;
+            Barrier(cmdList, src, D3D12_RESOURCE_STATE_COPY_SOURCE, srcState);
+        };
+
+        // The frame (the game's target arrives in targetState; the pass expects its copy in the arrival state).
+        Barrier(cmdList, a->tgt, a->tgtState, D3D12_RESOURCE_STATE_COPY_DEST);
+        TransitionTarget(D3D12_RESOURCE_STATE_COPY_SOURCE);
+        cmdList->CopyResource(a->tgt, target);
+        Barrier(cmdList, a->tgt, D3D12_RESOURCE_STATE_COPY_DEST, outputArrival);
+        a->tgtState = outputArrival;
+        TransitionTarget(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+        Copy(depth, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, a->depth, a->depthState,
+             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+        if (DlssNr::Temporal::PendingMirrorsAcc() && DlssNr::Temporal::HasResidual())
+        {
+            Barrier(cmdList, a->acc, a->accState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            a->accState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            DlssNr::Temporal::CopyAcc(cmdList, false, a->acc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            a->mvIsAcc = true;
+        }
+        else if (DlssNr::Temporal::PendingValid())
+        {
+            Barrier(cmdList, a->acc, a->accState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            a->accState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            DlssNr::Temporal::CopyAcc(cmdList, true, a->acc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            a->mvIsAcc = true;
+        }
+        else
+        {
+            Copy(motion, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, a->motion, a->motionState,
+                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            a->mvIsAcc = false;
+        }
+
+        a->kick = host;
+
+        HRESULT hrAlloc = a->alloc[slot]->Reset();
+        HRESULT hrList = SUCCEEDED(hrAlloc) ? a->list[slot]->Reset(a->alloc[slot], nullptr) : E_FAIL;
+
+        if (FAILED(hrAlloc) || FAILED(hrList))
+        {
+            g_asyncFailed = true;
+            LOG_ERROR("DLSS-NR background: could not reset the pass's command list; using the synchronous "
+                      "temporal mode");
+        }
+        else
+        {
+            DlssNrFrameInfo bgFrame = frame;
+            bgFrame.IndependentCommands = true;
+            bgFrame.ExposureTexture = a->exposureValid ? (void*) a->exposure : nullptr;
+
+            if (a->mvIsAcc)
+            {
+                bgFrame.MvScaleX = 1.0f;
+                bgFrame.MvScaleY = 1.0f;
+            }
+
+            const unsigned long long before = g_nr.successfulDispatches;
+            g_inAsyncKick = true;
+            Dispatch(a->list[slot], a->tgt, a->depth, a->mvIsAcc ? a->acc : a->motion, a->tgt, bgFrame, a->queue);
+            g_inAsyncKick = false;
+            a->hasResult = g_nr.successfulDispatches != before;
+
+            if (FAILED(a->list[slot]->Close()))
+            {
+                g_asyncFailed = true;
+                LOG_ERROR("DLSS-NR background: the pass's command list could not be closed");
+            }
+            else
+            {
+                a->jobId = nextJob;
+                a->slotJob[slot] = nextJob;
+                a->queue->Wait(a->fInputs, nextJob);
+                ID3D12CommandList* lists[] = { a->list[slot] };
+                a->queue->ExecuteCommandLists(1, lists);
+                a->queue->Signal(a->fModel, nextJob);
+                a->signalPending = true;
+                a->inflight = true;
+                a->sinceKick = 0;
+                a->age = 0;
+                DlssNr::Temporal::ResetPending();
+            }
+        }
+    }
+
+    ++a->sinceKick;
+
+    // 4. The frame the game gets: its own colour plus the reprojected edit of the last finished pass.
+    if (DlssNr::Temporal::HasResidual())
+    {
+        ScopedNrStateEnvelope envelope(cmdList);
+        DlssNr::Temporal::Reproject(cmdList, host, target, targetState);
+    }
+
+    TransitionTarget(outputArrival);
+    RestoreHostClones();
+    ++a->age;
+
+    // Skipped by the synchronous path's epilogue, so counted here.
+    static unsigned long long counted = 0;
+
+    if (++counted == 2)
+        LOG_INFO("DLSS-NR background: running (model pass every {} frames at most)", every);
+
+    return true;
+}
+
 void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* colour,
                            ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* output,
                            const DlssNrFrameInfo& frame, ID3D12CommandQueue* timingQueue)
@@ -1673,6 +2275,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         ReportSkipOnce(g_nr.failed ? "it already failed this session" : "a resource was missing");
         return;
     }
+
+    if (!g_inAsyncKick && AsyncDispatch(cmdList, colour, depth, motion, output, frame, timingQueue))
+        return;
 
     ID3D12Resource* target = output;
 
@@ -2517,10 +3122,14 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     }
 
     // Read the exposure scan's candidates on the pass's own command list, once a frame.
-    DlssNr::ExposureScan::Tick(device, cmdList);
+    // (The background pass runs later on another queue, so it must not read the game's candidates.)
+    if (!g_inAsyncKick)
+        DlssNr::ExposureScan::Tick(device, cmdList);
 
     ID3D12Resource* depthIn = ReadableGuide(device, cmdList, depth, &g_nr.depthClone);
     ID3D12Resource* motionIn = ReadableGuide(device, cmdList, motion, &g_nr.motionClone);
+    g_nr.lastDepthIn = depthIn;
+    g_nr.lastMotionIn = motionIn;
 
     if (depthIn == nullptr || motionIn == nullptr)
     {
@@ -3839,6 +4448,18 @@ void Shutdown()
 
     g_nr.warpUnpackTargetFailed = false;
     DlssNr::PeripheralWarp::Shutdown();
+    g_async.reset();
+    g_asyncFailed = false;
+
+    for (ID3D12Resource** clone : { &g_nr.hostDepthClone, &g_nr.hostMotionClone })
+    {
+        if (*clone != nullptr)
+        {
+            (*clone)->Release();
+            *clone = nullptr;
+        }
+    }
+
     DlssNr::Temporal::Shutdown();
     g_nr.passScratchFailed = false;
 

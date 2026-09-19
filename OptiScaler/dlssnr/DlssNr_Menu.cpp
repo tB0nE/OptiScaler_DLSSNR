@@ -342,6 +342,11 @@ void RenderMenu(Config* config, float menuResScale)
 
             HelpMarker("2 = the model runs on every other frame (about half the model cost). Higher saves more and ghosts more.");
 
+            bool background = config->DlssNrTemporalBackground.value_or_default();
+            if (ImGui::Checkbox("Run the model in the background", &background))
+                config->DlssNrTemporalBackground = background;
+            HelpMarker("The model runs on its own GPU queue, a few frames behind, so it no longer makes every other frame long. Every displayed frame is the game's frame plus the last finished result, moved along the motion vectors.\nEvens out frame times. New and experimental: it adds a second GPU queue. Any failure drops back to the normal mode. Restart the game after changing it.");
+
             if (ImGui::TreeNode("Temporal tuning"))
             {
                 bool catmull = config->DlssNrTemporalCatmullRom.value_or_default();
