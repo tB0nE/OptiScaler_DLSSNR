@@ -96,7 +96,7 @@ bool Install(ID3D12Device* device)
 
     ID3D12CommandQueue* realQueue = nullptr;
 
-    if (!CheckForRealObject(__FUNCTION__, queue, (IUnknown**) &realQueue))
+    if (!Util::CheckForRealObject(__FUNCTION__, queue, (IUnknown**) &realQueue))
         realQueue = queue;
 
     PVOID* vtable = *(PVOID**) realQueue;
