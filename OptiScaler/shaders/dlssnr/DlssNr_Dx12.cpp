@@ -2645,6 +2645,18 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     ID3D12Resource* warpedMotion = nullptr;
     unsigned int warpWidth = 0;
     unsigned int warpHeight = 0;
+    if (DlssNr::PeripheralWarp::Enabled() && g_nr.warpUnpackTarget == nullptr)
+    {
+        static bool warnedNoTarget = false;
+
+        if (!warnedNoTarget)
+        {
+            warnedNoTarget = true;
+            LOG_WARN("DLSS-NR PeripheralWarp is enabled but its reconstruction target is not available; "
+                     "running unwarped");
+        }
+    }
+
     bool warpActive = g_nr.warpUnpackTarget != nullptr &&
         DlssNr::PeripheralWarp::Enabled() &&
         DlssNr::PeripheralWarp::Pack(

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <string>
 #include <utility>
 #include <vector>
 #include <wrl/client.h>
@@ -108,6 +109,28 @@ Wanted ReadWanted()
 }
 
 constexpr unsigned int kRing = 8;
+
+// Every fallback to the unwarped model is otherwise silent, so log each distinct reason once.
+void LogFallback(const char* stage, const char* detail, unsigned int colorFormat, unsigned int depthFormat,
+                 unsigned int motionFormat, unsigned int colorW, unsigned int colorH, unsigned int depthW,
+                 unsigned int depthH, unsigned int motionW, unsigned int motionH)
+{
+    static std::string last;
+    const std::string now = std::string(stage) + "|" + detail + "|" + std::to_string(colorFormat) + "|" +
+                            std::to_string(depthFormat) + "|" + std::to_string(motionFormat) + "|" +
+                            std::to_string(colorW) + "x" + std::to_string(colorH) + "|" +
+                            std::to_string(depthW) + "x" + std::to_string(depthH) + "|" +
+                            std::to_string(motionW) + "x" + std::to_string(motionH);
+
+    if (now == last)
+        return;
+
+    last = now;
+    LOG_WARN("DLSS-NR PeripheralWarp: falling back to the unwarped model -- {} ({}); colour fmt {} {}x{}, "
+             "depth fmt {} {}x{}, motion fmt {} {}x{}",
+             stage, detail, colorFormat, colorW, colorH, depthFormat, depthW, depthH, motionFormat, motionW,
+             motionH);
+}
 
 State g_state;
 
@@ -350,8 +373,16 @@ bool Pack(
         outWorkHeight == nullptr)
         return false;
 
-    if (!EnsureInitialized(device, colorFormat, colorWidth, colorHeight))
+    const auto fail = [&](const char* stage, const char* detail)
+    {
+        LogFallback(stage, detail, (unsigned int) colorFormat, (unsigned int) depthFormat,
+                    (unsigned int) motionFormat, colorWidth, colorHeight, depthWidth, depthHeight,
+                    motionWidth, motionHeight);
         return false;
+    };
+
+    if (!EnsureInitialized(device, colorFormat, colorWidth, colorHeight))
+        return fail("init", g_state.initFailed ? "adapter setup failed earlier" : "adapter setup failed");
 
     pw::InputDescriptionV2 description = pw::DefaultInputDescriptionV2(colorWidth, colorHeight);
     description.colorRect = { 0, 0, colorWidth, colorHeight };
@@ -366,7 +397,7 @@ bool Pack(
     description.flags = pw::InputFlagNone;
 
     if (pw::ValidateInputDescriptionV2(description) != pw::Status::Ok)
-        return false;
+        return fail("input description", "rejected by the SDK (a rect or scale is out of range)");
 
     pw::D3D12SourceResources sources {};
     sources.color = { color, colorFormat };
@@ -379,8 +410,10 @@ bool Pack(
     // PIXEL_SHADER_RESOURCE, so they are switched for the draw and restored right after.
     const unsigned int ring = g_state.frameCounter++ % kRing;
 
-    if (g_state.adapter.WriteSourceSetV2(ring, sources, description) != pw::AdapterStatus::Ok)
-        return false;
+    const auto writeStatus = g_state.adapter.WriteSourceSetV2(ring, sources, description);
+
+    if (writeStatus != pw::AdapterStatus::Ok)
+        return fail("source registration", pw::AdapterStatusString(writeStatus));
 
     const auto packed = g_state.adapter.PackedViews(0);
 
@@ -436,12 +469,29 @@ bool Pack(
     g_state.packedNeedsTransitionIn = true;
 
     if (packStatus != pw::AdapterStatus::Ok)
-        return false;
+        return fail("pack draw", pw::AdapterStatusString(packStatus));
 
     g_state.lastPackedDepth = packed.resources.depth.resource;
     g_state.lastPackedMotion = packed.resources.motion.resource;
     g_state.lastDepthConvention = description.depthConvention;
     g_state.lastRing = ring;
+
+    {
+        static std::string lastOk;
+        const std::string now = std::to_string((int) colorFormat) + "/" + std::to_string((int) depthFormat) + "/" +
+                                std::to_string((int) motionFormat) + "/" + std::to_string(colorWidth) + "x" +
+                                std::to_string(colorHeight) + "/" + std::to_string(depthWidth) + "x" +
+                                std::to_string(depthHeight) + "/" + std::to_string(motionWidth) + "x" +
+                                std::to_string(motionHeight);
+
+        if (now != lastOk)
+        {
+            lastOk = now;
+            LOG_INFO("DLSS-NR PeripheralWarp: packing colour fmt {} {}x{}, depth fmt {} {}x{}, motion fmt {} {}x{}",
+                     (int) colorFormat, colorWidth, colorHeight, (int) depthFormat, depthWidth, depthHeight,
+                     (int) motionFormat, motionWidth, motionHeight);
+        }
+    }
 
     *outColor = packed.resources.color.resource;
     *outDepth = packed.resources.depth.resource;
