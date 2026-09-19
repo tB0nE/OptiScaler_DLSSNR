@@ -653,6 +653,8 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="dlssnr\DlssNr_PeripheralWarp.cpp" />
     <ClInclude Include="dlssnr\DlssNr_Temporal.h" />
     <ClCompile Include="dlssnr\DlssNr_Temporal.cpp" />
+    <ClInclude Include="dlssnr\DlssNr_AsyncHook.h" />
+    <ClCompile Include="dlssnr\DlssNr_AsyncHook.cpp" />
     <ClInclude Include="dlssnr\peripheral_warp\temporal\ngx_temporal.h" />
     <ClInclude Include="dlssnr\peripheral_warp\temporal\pwtemporal_support.h" />
     <ClCompile Include="dlssnr\peripheral_warp\temporal\ngx_temporal.cpp">

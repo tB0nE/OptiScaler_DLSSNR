@@ -19,6 +19,7 @@
 
 #include <dlssnr/DlssNr_PeripheralWarp.h>
 #include <dlssnr/DlssNr_Temporal.h>
+#include <dlssnr/DlssNr_AsyncHook.h>
 
 #include <Config.h>
 #include <State.h>
@@ -438,7 +439,6 @@ constexpr unsigned int kAsyncMaxAge = 8;
 struct AsyncJob
 {
     ID3D12Device* device = nullptr;
-    ID3D12CommandQueue* hostQueue = nullptr;
     ID3D12CommandQueue* queue = nullptr;
     ID3D12Fence* fInputs = nullptr;
     ID3D12Fence* fModel = nullptr;
@@ -479,9 +479,10 @@ struct AsyncJob
         if (queue == nullptr || fModel == nullptr)
             return;
 
-        if (signalPending && hostQueue != nullptr && fInputs != nullptr)
+        if (signalPending && fInputs != nullptr)
         {
-            hostQueue->Signal(fInputs, jobId);
+            DlssNr::AsyncHook::Cancel();
+            fInputs->Signal(jobId); // CPU signal: nothing else can release the pass
             signalPending = false;
         }
 
@@ -500,6 +501,7 @@ struct AsyncJob
     ~AsyncJob()
     {
         Settle();
+        DlssNr::AsyncHook::Cancel();
 
         // A pass that never finished may still be reading these; leaking them is safer than a lost device.
         if (fModel != nullptr && fModel->GetCompletedValue() < jobId)
@@ -528,9 +530,6 @@ struct AsyncJob
 
         if (queue != nullptr)
             queue->Release();
-
-        if (hostQueue != nullptr)
-            hostQueue->Release();
 
         if (device != nullptr)
             device->Release();
@@ -1788,13 +1787,13 @@ DlssNr_Dx12::~DlssNr_Dx12()
 
 
 // Creates (or re-creates) the background job for these resources. Null on failure.
-AsyncJob* EnsureAsyncJob(ID3D12Device* device, ID3D12CommandQueue* hostQueue, const D3D12_RESOURCE_DESC& tgtDesc,
+AsyncJob* EnsureAsyncJob(ID3D12Device* device, const D3D12_RESOURCE_DESC& tgtDesc,
                          const D3D12_RESOURCE_DESC& depthDesc, const D3D12_RESOURCE_DESC& motionDesc)
 {
     const auto same = [](const D3D12_RESOURCE_DESC& a, const D3D12_RESOURCE_DESC& b)
     { return a.Width == b.Width && a.Height == b.Height && a.Format == b.Format; };
 
-    if (g_async && g_async->hostQueue == hostQueue && same(tgtDesc, g_async->tgtDesc) &&
+    if (g_async && same(tgtDesc, g_async->tgtDesc) &&
         same(depthDesc, g_async->depthDesc) && same(motionDesc, g_async->motionDesc))
         return g_async.get();
 
@@ -1803,8 +1802,6 @@ AsyncJob* EnsureAsyncJob(ID3D12Device* device, ID3D12CommandQueue* hostQueue, co
     auto job = std::make_unique<AsyncJob>();
     job->device = device;
     device->AddRef();
-    job->hostQueue = hostQueue;
-    hostQueue->AddRef();
     job->tgtDesc = tgtDesc;
     job->depthDesc = depthDesc;
     job->motionDesc = motionDesc;
@@ -1906,12 +1903,7 @@ bool DlssNr_Dx12::AsyncDispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resour
     if (cmdList->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT)
         return AsyncDecline("the game's list is not a direct list");
 
-    // The queue the caller says the list runs on, else the swapchain's present queue.
-    ID3D12CommandQueue* const hostQueue =
-        timingQueue != nullptr ? timingQueue : (ID3D12CommandQueue*) State::Instance().currentCommandQueue;
-
-    if (hostQueue == nullptr)
-        return AsyncDecline("the game's command queue is not known yet");
+    (void) timingQueue;
 
     const bool restoreRequired = cfg.RestoreComputeSignature.value_or_default() ||
                                  cfg.RestoreGraphicSignature.value_or_default();
@@ -1952,7 +1944,10 @@ bool DlssNr_Dx12::AsyncDispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resour
     if (!guides.depth.valid() || !guides.motion.valid())
         return AsyncDecline("the depth or motion subrect is empty");
 
-    AsyncJob* const a = EnsureAsyncJob(device.Get(), hostQueue, desc, guideDesc, motionDesc);
+    if (!DlssNr::AsyncHook::Install(device.Get()))
+        return AsyncDecline("ExecuteCommandLists could not be hooked");
+
+    AsyncJob* const a = EnsureAsyncJob(device.Get(), desc, guideDesc, motionDesc);
 
     if (a == nullptr)
     {
@@ -2036,10 +2031,24 @@ bool DlssNr_Dx12::AsyncDispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resour
     host.frameW = width;
     host.frameH = height;
 
-    // The previous frame's kick list has been submitted by now: release the background pass that waits on it.
-    if (a->signalPending)
+    // The hook releases the background pass as soon as the game submits the list with its input copies.
+    // If that submission is never seen, release it from the CPU rather than wait forever.
+    if (a->signalPending && DlssNr::AsyncHook::Fired())
+        a->signalPending = false;
+
+    if (a->signalPending && a->age >= 3)
     {
-        hostQueue->Signal(a->fInputs, a->jobId);
+        static bool said = false;
+
+        if (!said)
+        {
+            said = true;
+            LOG_WARN("DLSS-NR background: the game's submission of a pass's input copies was not seen; "
+                     "releasing the pass from the CPU (its inputs may be a frame stale)");
+        }
+
+        DlssNr::AsyncHook::Cancel();
+        a->fInputs->Signal(a->jobId);
         a->signalPending = false;
     }
 
@@ -2074,7 +2083,8 @@ bool DlssNr_Dx12::AsyncDispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resour
         {
             if (a->signalPending)
             {
-                hostQueue->Signal(a->fInputs, a->jobId);
+                DlssNr::AsyncHook::Cancel();
+                a->fInputs->Signal(a->jobId);
                 a->signalPending = false;
             }
 
@@ -2263,6 +2273,7 @@ bool DlssNr_Dx12::AsyncDispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resour
                 a->queue->ExecuteCommandLists(1, lists);
                 a->queue->Signal(a->fModel, nextJob);
                 a->signalPending = true;
+                DlssNr::AsyncHook::Watch(cmdList, a->fInputs, nextJob);
                 a->inflight = true;
                 a->sinceKick = 0;
                 a->age = 0;
