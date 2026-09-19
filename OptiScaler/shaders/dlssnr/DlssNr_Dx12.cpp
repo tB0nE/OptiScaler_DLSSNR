@@ -3256,7 +3256,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                                  tf == DXGI_FORMAT_R10G10B10A2_UNORM || tf == DXGI_FORMAT_R8G8B8A8_UNORM ||
                                  tf == DXGI_FORMAT_B8G8R8A8_UNORM || tf == DXGI_FORMAT_R32G32B32A32_FLOAT;
 
-        if (DlssNr::Temporal::Enabled() && !frame.BeforeUpscale && typedColour && !cropColor &&
+        // Never inside a background pass: that pass IS the model run. Its game-facing frames do the
+        // reprojecting, and the machine must not be touched from the background queue.
+        if (!g_inAsyncKick && DlssNr::Temporal::Enabled() && !frame.BeforeUpscale && typedColour && !cropColor &&
             g_nr.hdrCopy != nullptr)
         {
             temporalActive = DlssNr::Temporal::Plan(device, width, height, tf, motionIn, depthIn, g_nr.reset,
