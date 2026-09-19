@@ -3,6 +3,7 @@
 
 #include "DlssNr.h"
 #include "DlssNr_ExposureScan.h"
+#include "DlssNr_PeripheralWarp.h"
 #include "DlssNrNative.h"
 
 
@@ -269,6 +270,60 @@ void RenderMenu(Config* config, float menuResScale)
             ImGui::PopStyleColor(2);
 
             HelpMarker("Process the image repeatedly. More passes strengthen the effect and increase GPU cost.\nEach pass has its own settings and history. Start with 1.");
+        }
+
+        if (ImGui::TreeNodeEx("Peripheral warp (experimental)", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            bool warpOn = config->DlssNrPeripheralWarpEnabled.value_or_default();
+
+            if (ImGui::Checkbox("Enable peripheral warp", &warpOn))
+                config->DlssNrPeripheralWarpEnabled = warpOn;
+
+            HelpMarker("Shrinks the outer part of the frame before the model runs and restores it afterwards, so the model does less work. The centre stays 1:1 sharp; only the edges get softer.\nApplies to model pass 1 only. Based on optimizer-fps-dlss5 (MIT).");
+
+            static bool linkAxes = true;
+            ImGui::Checkbox("Link X and Y", &linkAxes);
+
+            const auto axisRow = [&](const char* centerLabel, const char* workLabel,
+                                     CustomOptional<float>* center, CustomOptional<float>* work,
+                                     CustomOptional<float>* otherCenter, CustomOptional<float>* otherWork)
+            {
+                if (DeferredSlider(centerLabel, center, 10.0f, 100.0f, 80.0f, "%.0f%%"))
+                {
+                    const float c = center->value_or_default();
+                    *work = std::max(work->value_or_default(), std::min(100.0f, (100.0f + c) * 0.5f + 0.01f));
+
+                    if (linkAxes)
+                    {
+                        *otherCenter = c;
+                        *otherWork = work->value_or_default();
+                    }
+                }
+
+                const float minWork = std::min(100.0f, (100.0f + center->value_or_default()) * 0.5f + 0.01f);
+
+                if (DeferredSlider(workLabel, work, minWork, 100.0f, std::max(90.0f, minWork), "%.0f%%") && linkAxes)
+                    *otherWork = work->value_or_default();
+            };
+
+            axisRow("Center X", "Work X", &config->DlssNrPeripheralWarpCenterX,
+                    &config->DlssNrPeripheralWarpWorkX, &config->DlssNrPeripheralWarpCenterY,
+                    &config->DlssNrPeripheralWarpWorkY);
+            axisRow("Center Y", "Work Y", &config->DlssNrPeripheralWarpCenterY,
+                    &config->DlssNrPeripheralWarpWorkY, &config->DlssNrPeripheralWarpCenterX,
+                    &config->DlssNrPeripheralWarpWorkX);
+
+            HelpMarker("Center: how much of each axis stays at full 1:1 detail.\nWork: how much of each axis the model actually processes -- smaller is faster and softer at the edges.\nWork can't go below halfway between Center and 100%, so a smaller Center allows a smaller Work.");
+
+            unsigned int nw = 0, nh = 0, ww = 0, wh = 0;
+
+            if (warpOn && DlssNr::PeripheralWarp::GetInfo(&nw, &nh, &ww, &wh))
+                ImGui::TextDisabled("Model sees %ux%u instead of %ux%u (%.0f%% of the pixels)", ww, wh, nw, nh,
+                                    100.0f * (float) ww * (float) wh / ((float) nw * (float) nh));
+            else if (warpOn)
+                ImGui::TextDisabled("Not active yet (waits for the first frame, or the shader files are missing).");
+
+            ImGui::TreePop();
         }
 
         // Any percentage, rather than a handful of steps somebody chose in advance. The lower bound

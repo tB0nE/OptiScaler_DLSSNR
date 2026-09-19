@@ -6,6 +6,8 @@
 
 #include "peripheral_warp/adapters/d3d12/d3d12_adapter.h"
 
+#include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <utility>
 #include <vector>
@@ -58,7 +60,52 @@ struct State
     // Sets [0, kRing) pack, [kRing, 2*kRing) unpack.
     unsigned int frameCounter = 0;
     unsigned int lastRing = 0;
+
+    // The Center/Work percentages the current adapter was built with (after clamping).
+    bool haveCfg = false;
+    float cfgCenterX = 0.0f;
+    float cfgCenterY = 0.0f;
+    float cfgWorkX = 0.0f;
+    float cfgWorkY = 0.0f;
 };
+
+// A replaced adapter is kept alive for a while rather than destroyed: the GPU can run several
+// frames behind the CPU on the game's own queue, and freeing resources under in-flight work is
+// the device hang this codebase already documents for the model's own scratch surfaces.
+struct Retired
+{
+    pw::D3D12Adapter adapter;
+    ComPtr<ID3D12DescriptorHeap> rtvHeap;
+    ComPtr<ID3D12Resource> unpackTarget;
+    int framesLeft = 64;
+};
+
+std::vector<Retired> g_retired;
+
+struct Wanted
+{
+    float centerX, centerY, workX, workY;
+};
+
+// Any ini or slider value becomes a layout the SDK accepts: 0 < Center <= Work <= 100 and
+// Work >= (100 + Center) / 2 per axis.
+Wanted ReadWanted()
+{
+    const auto& cfg = *Config::Instance();
+    const auto axis = [](float center, float work, float& c, float& w)
+    {
+        c = std::clamp(std::isfinite(center) ? center : 80.0f, 10.0f, 100.0f);
+        w = std::clamp(std::isfinite(work) ? work : 90.0f, 10.0f, 100.0f);
+        w = std::min(100.0f, std::max(w, (100.0f + c) * 0.5f + 0.01f));
+    };
+
+    Wanted r {};
+    axis(cfg.DlssNrPeripheralWarpCenterX.value_or_default(), cfg.DlssNrPeripheralWarpWorkX.value_or_default(),
+         r.centerX, r.workX);
+    axis(cfg.DlssNrPeripheralWarpCenterY.value_or_default(), cfg.DlssNrPeripheralWarpWorkY.value_or_default(),
+         r.centerY, r.workY);
+    return r;
+}
 
 constexpr unsigned int kRing = 8;
 
@@ -82,12 +129,24 @@ bool LoadFile(const std::filesystem::path& path, std::vector<char>& out)
     return (bool) f;
 }
 
-void ShutdownInternal()
+void ShutdownInternal(bool retire)
 {
     if (!g_state.initialized)
         return;
 
-    g_state.adapter.Shutdown();
+    if (retire)
+    {
+        Retired old;
+        old.adapter = std::move(g_state.adapter);
+        old.rtvHeap = std::move(g_state.rtvHeap);
+        old.unpackTarget = std::move(g_state.unpackTarget);
+        g_retired.push_back(std::move(old));
+    }
+    else
+    {
+        g_state.adapter.Shutdown();
+    }
+
     g_state.rtvHeap.Reset();
     g_state.unpackTarget.Reset();
     g_state.unpackTargetNeedsTransitionIn = false;
@@ -103,17 +162,29 @@ void ShutdownInternal()
 bool EnsureInitialized(ID3D12Device* device, DXGI_FORMAT colorFormat, unsigned int nativeWidth,
                        unsigned int nativeHeight)
 {
-    if (g_state.initialized && g_state.nativeWidth == nativeWidth && g_state.nativeHeight == nativeHeight &&
-        g_state.format == colorFormat)
+    const Wanted wanted = ReadWanted();
+    const bool cfgChanged = !g_state.haveCfg || wanted.centerX != g_state.cfgCenterX ||
+                            wanted.centerY != g_state.cfgCenterY || wanted.workX != g_state.cfgWorkX ||
+                            wanted.workY != g_state.cfgWorkY;
+
+    if (g_state.initialized && !cfgChanged && g_state.nativeWidth == nativeWidth &&
+        g_state.nativeHeight == nativeHeight && g_state.format == colorFormat)
         return true;
 
     if (g_state.initialized)
-        ShutdownInternal();
+        ShutdownInternal(true);
+
+    if (cfgChanged)
+        g_state.initFailed = false;
 
     if (g_state.initFailed)
         return false;
 
-    auto& cfg = *Config::Instance();
+    g_state.haveCfg = true;
+    g_state.cfgCenterX = wanted.centerX;
+    g_state.cfgCenterY = wanted.centerY;
+    g_state.cfgWorkX = wanted.workX;
+    g_state.cfgWorkY = wanted.workY;
     const auto dir = Util::DllPath().remove_filename() / "peripheral_warp";
 
     if (g_state.vsBytes.empty() &&
@@ -128,10 +199,10 @@ bool EnsureInitialized(ID3D12Device* device, DXGI_FORMAT colorFormat, unsigned i
 
     pw::ConfigV1 pwConfig = pw::DefaultConfigV1();
     pwConfig.mode = pw::WarpMode::Peripheral;
-    pwConfig.xAxis.centerPercent = cfg.DlssNrPeripheralWarpCenterX.value_or_default();
-    pwConfig.xAxis.workPercent = cfg.DlssNrPeripheralWarpWorkX.value_or_default();
-    pwConfig.yAxis.centerPercent = cfg.DlssNrPeripheralWarpCenterY.value_or_default();
-    pwConfig.yAxis.workPercent = cfg.DlssNrPeripheralWarpWorkY.value_or_default();
+    pwConfig.xAxis.centerPercent = wanted.centerX;
+    pwConfig.xAxis.workPercent = wanted.workX;
+    pwConfig.yAxis.centerPercent = wanted.centerY;
+    pwConfig.yAxis.workPercent = wanted.workY;
 
     if (pw::ValidateConfig(pwConfig) != pw::Status::Ok)
     {
@@ -232,7 +303,24 @@ bool EnsureInitialized(ID3D12Device* device, DXGI_FORMAT colorFormat, unsigned i
 
 bool Enabled() { return Config::Instance()->DlssNrPeripheralWarpEnabled.value_or_default(); }
 
-void Shutdown() { ShutdownInternal(); }
+void Shutdown()
+{
+    ShutdownInternal(false);
+    g_retired.clear();
+}
+
+bool GetInfo(unsigned int* nativeWidth, unsigned int* nativeHeight, unsigned int* workWidth,
+             unsigned int* workHeight)
+{
+    if (!g_state.initialized)
+        return false;
+
+    *nativeWidth = g_state.nativeWidth;
+    *nativeHeight = g_state.nativeHeight;
+    *workWidth = g_state.workWidth;
+    *workHeight = g_state.workHeight;
+    return true;
+}
 
 bool Pack(
     ID3D12Device* device, ID3D12GraphicsCommandList* cmdList,
@@ -250,6 +338,12 @@ bool Pack(
     // silently reuse stale data.
     g_state.lastPackedDepth = nullptr;
     g_state.lastPackedMotion = nullptr;
+
+    for (auto& r : g_retired)
+        --r.framesLeft;
+    g_retired.erase(std::remove_if(g_retired.begin(), g_retired.end(),
+                                   [](const Retired& r) { return r.framesLeft <= 0; }),
+                    g_retired.end());
 
     if (device == nullptr || cmdList == nullptr || color == nullptr || depth == nullptr || motion == nullptr ||
         outColor == nullptr || outDepth == nullptr || outMotion == nullptr || outWorkWidth == nullptr ||

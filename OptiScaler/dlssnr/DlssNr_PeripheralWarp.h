@@ -23,6 +23,10 @@ namespace DlssNr::PeripheralWarp
 // Config-gated; false unless [DlssNr] PeripheralWarpEnabled=true.
 bool Enabled();
 
+// The layout the adapter is currently built for. False until the first successful Pack().
+bool GetInfo(unsigned int* nativeWidth, unsigned int* nativeHeight, unsigned int* workWidth,
+             unsigned int* workHeight);
+
 // Releases the adapter and its resources. Call on device loss / shutdown / resolution change,
 // the same way the rest of NrState's D3D12 resources are torn down.
 void Shutdown();
