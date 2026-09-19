@@ -18,6 +18,7 @@
 #include "DlssNr_SeamClock.h"
 
 #include <dlssnr/DlssNr_PeripheralWarp.h>
+#include <dlssnr/DlssNr_Temporal.h>
 
 #include <Config.h>
 #include <State.h>
@@ -2567,6 +2568,58 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         return;
     }
 
+    // Temporal mode: on most frames the model does not run at all. This frame's edit is the last
+    // full frame's (final minus untouched), moved along the game's motion vectors. After-SR only, and
+    // only for a target format the machine can render into.
+    bool temporalActive = false;
+    bool interpolated = false;
+    DlssNr::Temporal::FrameArgs temporalArgs;
+
+    {
+        const DXGI_FORMAT tf = desc.Format;
+        const bool typedColour = tf == DXGI_FORMAT_R16G16B16A16_FLOAT || tf == DXGI_FORMAT_R11G11B10_FLOAT ||
+                                 tf == DXGI_FORMAT_R10G10B10A2_UNORM || tf == DXGI_FORMAT_R8G8B8A8_UNORM ||
+                                 tf == DXGI_FORMAT_B8G8R8A8_UNORM || tf == DXGI_FORMAT_R32G32B32A32_FLOAT;
+
+        if (DlssNr::Temporal::Enabled() && !frame.BeforeUpscale && typedColour && !cropColor &&
+            g_nr.hdrCopy != nullptr)
+        {
+            temporalActive = DlssNr::Temporal::Plan(device, width, height, tf, motionIn, depthIn, g_nr.reset,
+                                                    &interpolated);
+
+            if (temporalActive)
+            {
+                temporalArgs.base = g_nr.hdrCopy;
+                temporalArgs.motion = motionIn;
+                temporalArgs.motionView = motionIn->GetDesc().Format;
+                temporalArgs.motionX = motionBaseX;
+                temporalArgs.motionY = motionBaseY;
+                temporalArgs.motionW = motionWidth;
+                temporalArgs.motionH = motionHeight;
+                temporalArgs.depth = depthIn;
+                temporalArgs.depthView = depthIn->GetDesc().Format;
+                temporalArgs.depthX = depthBaseX;
+                temporalArgs.depthY = depthBaseY;
+                temporalArgs.depthW = guideWidth;
+                temporalArgs.depthH = guideHeight;
+                temporalArgs.mvScaleX = g_nr.guideMvScaleX;
+                temporalArgs.mvScaleY = g_nr.guideMvScaleY;
+                temporalArgs.depthInverted = g_nr.guideDepthInverted;
+                temporalArgs.frameW = width;
+                temporalArgs.frameH = height;
+
+                if (interpolated || DlssNr::Temporal::AccValid())
+                    DlssNr::Temporal::Accumulate(cmdList, temporalArgs);
+
+                if (interpolated)
+                {
+                    DlssNr::Temporal::Reproject(cmdList, temporalArgs, target, targetState);
+                    DlssNr::Temporal::FrameDone(false);
+                }
+            }
+        }
+    }
+
     if (g_ngxTime != nullptr)
         g_ngxTime->Start(cmdList);
 
@@ -2672,9 +2725,26 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // The warp's SDK reads only two-channel motion. With ray tracing the game writes a four-channel
     // texture, so convert it (the same pass that normalises motion for frame generation, at unit
     // scale so the values stay exactly what the model would have read).
-    ID3D12Resource* warpMotionSource = motionIn;
+    // After skipped frames the model's history is several frames old, so it is given the motion
+    // accumulated since then (already full-frame pixels, two channels) instead of one frame's.
+    ID3D12Resource* modelMotion = motionIn;
+    float modelMvX = g_nr.guideMvScaleX * mvToWorkX;
+    float modelMvY = g_nr.guideMvScaleY * mvToWorkY;
+    bool modelMotionIsAcc = false;
 
-    if (g_nr.warpUnpackTarget != nullptr && DlssNr::PeripheralWarp::Enabled() &&
+    if (temporalActive && !interpolated && DlssNr::Temporal::AccValid() &&
+        DlssNr::Temporal::Acc() != nullptr)
+    {
+        modelMotion = DlssNr::Temporal::Acc();
+        modelMvX = mvToWorkX;
+        modelMvY = mvToWorkY;
+        modelMotionIsAcc = true;
+    }
+
+    ID3D12Resource* warpMotionSource = modelMotion;
+
+    if (!interpolated && !modelMotionIsAcc && g_nr.warpUnpackTarget != nullptr &&
+        DlssNr::PeripheralWarp::Enabled() &&
         !DlssNr::PeripheralWarp::MotionFormatSupported(motionIn->GetDesc().Format))
     {
         const D3D12_RESOURCE_DESC md = motionIn->GetDesc();
@@ -2714,14 +2784,16 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         }
     }
 
-    bool warpActive = g_nr.warpUnpackTarget != nullptr &&
+    bool warpActive = !interpolated && g_nr.warpUnpackTarget != nullptr &&
         DlssNr::PeripheralWarp::Enabled() &&
         DlssNr::PeripheralWarp::Pack(
             device, cmdList, passInput, desc.Format, workWidth, workHeight,
             depthIn, depthIn->GetDesc().Format, depthBaseX, depthBaseY, guideWidth, guideHeight,
             warpMotionSource, warpMotionSource->GetDesc().Format, motionBaseX, motionBaseY, motionWidth, motionHeight,
-            g_nr.guideMvScaleX * mvToWorkX, g_nr.guideMvScaleY * mvToWorkY, g_nr.guideDepthInverted,
-            &warpedColor, &warpedDepth, &warpedMotion, &warpWidth, &warpHeight);
+            modelMvX, modelMvY, g_nr.guideDepthInverted,
+            &warpedColor, &warpedDepth, &warpedMotion, &warpWidth, &warpHeight,
+            modelMotionIsAcc ? D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE
+                             : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
     if (warpActive &&
         (g_nr.warpModelOutput == nullptr || g_nr.warpModelWidth != warpWidth ||
@@ -2744,7 +2816,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
 
     int result = NVSDK_NGX_Result_Success;
 
-    for (unsigned int pass = 0; pass < effectivePasses && result == NVSDK_NGX_Result_Success;
+    for (unsigned int pass = 0; pass < (interpolated ? 0u : effectivePasses) && result == NVSDK_NGX_Result_Success;
          ++pass)
     {
         void* const passFeature = pass == 0 ? g_nr.feature : g_nr.passFeature[pass];
@@ -2763,7 +2835,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             cmdList, passFeature, g_nr.capabilityParams,
             warpThisPass ? warpedColor : passInput,
             warpThisPass ? warpedDepth : depthIn,
-            warpThisPass ? warpedMotion : motionIn,
+            warpThisPass ? warpedMotion : modelMotion,
             evalOutput,
             warpThisPass ? warpWidth : workWidth, warpThisPass ? warpHeight : workHeight,
             warpThisPass ? warpWidth : guideWidth, warpThisPass ? warpHeight : guideHeight,
@@ -2775,8 +2847,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             (int) PassStyle(cfg, pass), tuning.structure,
             tuning.tone, tuning.skin,
             tuning.autoMask ? 1 : 0,
-            warpThisPass ? 1.0f : g_nr.guideMvScaleX * mvToWorkX,
-            warpThisPass ? 1.0f : g_nr.guideMvScaleY * mvToWorkY);
+            warpThisPass ? 1.0f : modelMvX,
+            warpThisPass ? 1.0f : modelMvY);
 
         if (result != NVSDK_NGX_Result_Success)
             break;
@@ -2906,7 +2978,11 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                  PassStyle(cfg, 0));
     }
 
-    if (result == NVSDK_NGX_Result_Success)
+    if (interpolated)
+    {
+        // Nothing to resolve: the reprojected frame is already in the target.
+    }
+    else if (result == NVSDK_NGX_Result_Success)
     {
         // Resolve takes the difference between what the model returned and what it was shown, and adds
         // that back to the frame. At strength zero the result is what the upscaler produced, exactly, and
@@ -3045,6 +3121,13 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             TransitionTarget(priorTargetState);
             Barrier(cmdList, g_nr.hdrCopy, D3D12_RESOURCE_STATE_COPY_SOURCE,
                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
+
+        // The edit this full frame made, for the frames that skip the model: final minus untouched.
+        if (temporalActive)
+        {
+            DlssNr::Temporal::Residual(cmdList, temporalArgs, target, targetState);
+            DlssNr::Temporal::FrameDone(true);
         }
 
         MakeModelWritable(g_nr.output);
@@ -3756,6 +3839,7 @@ void Shutdown()
 
     g_nr.warpUnpackTargetFailed = false;
     DlssNr::PeripheralWarp::Shutdown();
+    DlssNr::Temporal::Shutdown();
     g_nr.passScratchFailed = false;
 
     if (g_nr.colorCopy != nullptr)

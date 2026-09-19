@@ -57,7 +57,8 @@ bool Pack(
     unsigned int motionBaseX, unsigned int motionBaseY, unsigned int motionWidth, unsigned int motionHeight,
     float motionScaleX, float motionScaleY, bool depthInverted,
     ID3D12Resource** outColor, ID3D12Resource** outDepth, ID3D12Resource** outMotion,
-    unsigned int* outWorkWidth, unsigned int* outWorkHeight) noexcept;
+    unsigned int* outWorkWidth, unsigned int* outWorkHeight,
+    D3D12_RESOURCE_STATES motionState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE) noexcept;
 
 // Reconstructs the model's work-extent answer back to nativeWidth x nativeHeight, into
 // nativeTarget -- one of this fork's own UAV scratch buffers (g_nr.output / g_nr.passScratch),

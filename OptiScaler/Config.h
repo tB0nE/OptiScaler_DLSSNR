@@ -426,6 +426,11 @@ class Config
     // 0 = normal; 1 = skip the model and unpack Pack()'s own output (isolates warp geometry from the model).
     CustomOptional<uint32_t> DlssNrPeripheralWarpDebug { 0 };
 
+    // Temporal mode: the model runs on every Nth frame; the frames between reuse its last edit,
+    // reprojected along the game's motion vectors. After-SR placement only.
+    CustomOptional<bool> DlssNrTemporalEnabled { false };
+    CustomOptional<uint32_t> DlssNrTemporalEvery { 2 };
+
     // Look for the exposure the game computed but never handed to the upscaler.
     //
     // Off by default, and it has to be. Reading a resource the game owns means assuming what state

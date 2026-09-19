@@ -326,6 +326,25 @@ void RenderMenu(Config* config, float menuResScale)
             ImGui::TreePop();
         }
 
+        if (ImGui::TreeNodeEx("Temporal (experimental)", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            bool temporalOn = config->DlssNrTemporalEnabled.value_or_default();
+
+            if (ImGui::Checkbox("Skip the model on some frames", &temporalOn))
+                config->DlssNrTemporalEnabled = temporalOn;
+
+            HelpMarker("The model runs on one frame in N. The frames in between reuse its last edit, moved along the game's motion vectors, which costs a fraction of a model pass.\nExpect some ghosting on fast motion. Needs the DLSS-NR placement 'after SR' and the temporal_*.dxbc shader files beside the peripheral_warp ones.");
+
+            int every = (int) std::clamp(config->DlssNrTemporalEvery.value_or_default(), 2u, 8u);
+
+            if (ImGui::SliderInt("Model runs every", &every, 2, 8, "%d frames"))
+                config->DlssNrTemporalEvery = (uint32_t) std::clamp(every, 2, 8);
+
+            HelpMarker("2 = the model runs on every other frame (about half the model cost). Higher saves more and ghosts more.");
+
+            ImGui::TreePop();
+        }
+
         // Any percentage, rather than a handful of steps somebody chose in advance. The lower bound
         // is 25%: below that the model is working on so little of the picture that its answer no
         // longer survives being enlarged onto it.

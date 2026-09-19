@@ -360,7 +360,7 @@ bool Pack(
     unsigned int motionBaseX, unsigned int motionBaseY, unsigned int motionWidth, unsigned int motionHeight,
     float motionScaleX, float motionScaleY, bool depthInverted,
     ID3D12Resource** outColor, ID3D12Resource** outDepth, ID3D12Resource** outMotion,
-    unsigned int* outWorkWidth, unsigned int* outWorkHeight) noexcept
+    unsigned int* outWorkWidth, unsigned int* outWorkHeight, D3D12_RESOURCE_STATES motionState) noexcept
 {
     // A fresh Pack() invalidates any leftover guides from a previous frame immediately: if this
     // call fails or is never reached again this frame, Unpack() must refuse to run rather than
@@ -449,24 +449,36 @@ bool Pack(
     cmdList->ResourceBarrier(3, toRt);
 
     D3D12_RESOURCE_BARRIER srcToPixel[3] {};
-    for (auto& b : srcToPixel)
+    UINT srcCount = 0;
+    const auto addSource = [&](ID3D12Resource* res, D3D12_RESOURCE_STATES before)
     {
+        // Already readable by a pixel shader: nothing to change (a same-state barrier is illegal).
+        if ((before & D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE) != 0)
+            return;
+
+        auto& b = srcToPixel[srcCount++];
         b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource = res;
         b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        b.Transition.StateBefore = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        b.Transition.StateBefore = before;
         b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    }
-    srcToPixel[0].Transition.pResource = color;
-    srcToPixel[1].Transition.pResource = depth;
-    srcToPixel[2].Transition.pResource = motion;
-    cmdList->ResourceBarrier(3, srcToPixel);
+    };
+    addSource(color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    addSource(depth, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    addSource(motion, motionState);
+
+    if (srcCount != 0)
+        cmdList->ResourceBarrier(srcCount, srcToPixel);
 
     const auto packStatus = g_state.adapter.RecordPackFromSet(cmdList, 0, ring);
 
-    D3D12_RESOURCE_BARRIER srcBack[3] { srcToPixel[0], srcToPixel[1], srcToPixel[2] };
-    for (auto& b : srcBack)
-        std::swap(b.Transition.StateBefore, b.Transition.StateAfter);
-    cmdList->ResourceBarrier(3, srcBack);
+    if (srcCount != 0)
+    {
+        D3D12_RESOURCE_BARRIER srcBack[3] { srcToPixel[0], srcToPixel[1], srcToPixel[2] };
+        for (UINT i = 0; i < srcCount; ++i)
+            std::swap(srcBack[i].Transition.StateBefore, srcBack[i].Transition.StateAfter);
+        cmdList->ResourceBarrier(srcCount, srcBack);
+    }
 
     D3D12_RESOURCE_BARRIER toSrv[3] { toRt[0], toRt[1], toRt[2] };
     for (auto& b : toSrv)

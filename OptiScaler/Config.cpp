@@ -353,6 +353,8 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrPeripheralWarpWorkX.set_from_config(readFloat("DlssNr", "PeripheralWarpWorkX"));
             DlssNrPeripheralWarpWorkY.set_from_config(readFloat("DlssNr", "PeripheralWarpWorkY"));
             DlssNrPeripheralWarpDebug.set_from_config(readUInt("DlssNr", "PeripheralWarpDebug"));
+            DlssNrTemporalEnabled.set_from_config(readBool("DlssNr", "TemporalEnabled"));
+            DlssNrTemporalEvery.set_from_config(readUInt("DlssNr", "TemporalEvery"));
             DlssNrScanExposure.set_from_config(readBool("DlssNr", "ScanExposure"));
             DlssNrWhitePointSource.set_from_config(readUInt("DlssNr", "WhitePointSource"));
 
@@ -1290,6 +1292,8 @@ bool Config::SaveIni()
     ini.SetValue("DlssNr", "PeripheralWarpWorkX", GetFloatValue(Instance()->DlssNrPeripheralWarpWorkX.value_for_config()).c_str());
     ini.SetValue("DlssNr", "PeripheralWarpWorkY", GetFloatValue(Instance()->DlssNrPeripheralWarpWorkY.value_for_config()).c_str());
     ini.SetValue("DlssNr", "PeripheralWarpDebug", GetIntValue(Instance()->DlssNrPeripheralWarpDebug.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "TemporalEnabled", GetBoolValue(Instance()->DlssNrTemporalEnabled.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "TemporalEvery", GetIntValue(Instance()->DlssNrTemporalEvery.value_for_config()).c_str());
     ini.SetValue("DlssNr", "ProxyProbe", GetBoolValue(Instance()->DlssNrProxyProbe.value_for_config()).c_str());
     // ScanExposure is a developer override with no menu control; persist it so a set ini keeps it.
     ini.SetValue("DlssNr", "ScanExposure", GetBoolValue(Instance()->DlssNrScanExposure.value_for_config()).c_str());
