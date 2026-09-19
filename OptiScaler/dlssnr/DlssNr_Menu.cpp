@@ -364,6 +364,11 @@ void RenderMenu(Config* config, float menuResScale)
                     config->DlssNrTemporalAccMotion = accMotion;
                 HelpMarker("After skipped frames the model is given the motion accumulated since its last run. Turn off to give it a single frame's motion.");
 
+                float blend = config->DlssNrTemporalBlend.value_or_default();
+                if (ImGui::SliderFloat("Blend with previous edit", &blend, 0.0f, 0.9f, "%.2f"))
+                    config->DlssNrTemporalBlend = blend;
+                HelpMarker("Background mode only. How much of the previous pass's edit is carried into each new one. 0 = none. Above 0 it steadies flicker but can leave trails if the motion is slightly off.");
+
                 float colorTol = config->DlssNrTemporalColorTolerance.value_or_default();
                 if (ImGui::SliderFloat("Colour tolerance", &colorTol, 0.0f, 0.5f, "%.2f"))
                     config->DlssNrTemporalColorTolerance = colorTol;

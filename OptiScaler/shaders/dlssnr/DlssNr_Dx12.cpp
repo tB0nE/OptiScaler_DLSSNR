@@ -2125,7 +2125,8 @@ bool DlssNr_Dx12::AsyncDispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resour
                 adopt.depthView = g_nr.lastDepthIn->GetDesc().Format;
                 adopt.depthState = rest(g_nr.lastDepthIn, g_nr.depthClone);
                 adopt.motionIsChain = a->mvIsAcc;
-                adopt.residualBlend = a->mvIsAcc ? 0.6f : 0.0f;
+                adopt.residualBlend =
+                    a->mvIsAcc ? std::clamp(cfg.DlssNrTemporalBlend.value_or_default(), 0.0f, 0.9f) : 0.0f;
                 adopt.blendFromMotion = true;
 
                 DlssNr::Temporal::Residual(cmdList, adopt, a->tgt, a->tgtState);
@@ -2209,14 +2210,16 @@ bool DlssNr_Dx12::AsyncDispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resour
         Copy(depth, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, a->depth, a->depthState,
              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
-        if (DlssNr::Temporal::PendingMirrorsAcc() && DlssNr::Temporal::HasResidual())
+        const bool accForModel = cfg.DlssNrTemporalAccMotion.value_or_default();
+
+        if (accForModel && DlssNr::Temporal::PendingMirrorsAcc() && DlssNr::Temporal::HasResidual())
         {
             Barrier(cmdList, a->acc, a->accState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             a->accState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
             DlssNr::Temporal::CopyAcc(cmdList, false, a->acc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             a->mvIsAcc = true;
         }
-        else if (DlssNr::Temporal::PendingValid())
+        else if (accForModel && DlssNr::Temporal::PendingValid())
         {
             Barrier(cmdList, a->acc, a->accState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             a->accState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;

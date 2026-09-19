@@ -434,6 +434,9 @@ class Config
     // every displayed frame is the game's frame plus the last finished pass's edit, reprojected.
     // Evens out frame times. Needs TemporalEnabled; falls back to the synchronous mode on any failure.
     CustomOptional<bool> DlssNrTemporalBackground { false };
+    // Background mode: weight of the previous pass's edit (moved to this pass's frame) in each new
+    // one. 0 = none; the new edit stands alone.
+    CustomOptional<float> DlssNrTemporalBlend { 0.0f };
     // Tuning of the reprojection (see the menu). Catmull-Rom sampling can overshoot around very
     // bright edges, so it is off by default here.
     CustomOptional<bool> DlssNrTemporalCatmullRom { false };
