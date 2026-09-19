@@ -437,6 +437,8 @@ class Config
     // Background mode: weight of the previous pass's edit (moved to this pass's frame) in each new
     // one. 0 = none; the new edit stands alone.
     CustomOptional<float> DlssNrTemporalBlend { 0.0f };
+    // Background mode: give the pass a private copy of the game's exposure (else it uses the slider).
+    CustomOptional<bool> DlssNrTemporalBgExposure { true };
     // Tuning of the reprojection (see the menu). Catmull-Rom sampling can overshoot around very
     // bright edges, so it is off by default here.
     CustomOptional<bool> DlssNrTemporalCatmullRom { false };

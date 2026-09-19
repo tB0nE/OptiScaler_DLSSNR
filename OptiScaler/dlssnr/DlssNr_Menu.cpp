@@ -364,6 +364,11 @@ void RenderMenu(Config* config, float menuResScale)
                     config->DlssNrTemporalAccMotion = accMotion;
                 HelpMarker("After skipped frames the model is given the motion accumulated since its last run. Turn off to give it a single frame's motion.");
 
+                bool bgExposure = config->DlssNrTemporalBgExposure.value_or_default();
+                if (ImGui::Checkbox("Background pass uses the game's exposure", &bgExposure))
+                    config->DlssNrTemporalBgExposure = bgExposure;
+                HelpMarker("Background mode only. The pass reads a private copy of the game's exposure. Untick to make it use the paper-white slider instead (a diagnostic).");
+
                 float blend = config->DlssNrTemporalBlend.value_or_default();
                 if (ImGui::SliderFloat("Blend with previous edit", &blend, 0.0f, 0.9f, "%.2f"))
                     config->DlssNrTemporalBlend = blend;
@@ -384,8 +389,9 @@ void RenderMenu(Config* config, float menuResScale)
                     config->DlssNrTemporalSmoothRadius = smooth;
                 HelpMarker("How far the added edit is smoothed around rejected pixels. 0 = off.");
 
-                static const char* const views[] = { "Normal", "Displacement / weight", "The stored edit", "Raw frame (no edit)" };
-                int view = (int) std::min(config->DlssNrTemporalDebugView.value_or_default(), 3u);
+                static const char* const views[] = { "Normal", "Displacement / weight", "The stored edit", "Raw frame (no edit)",
+                                                     "Last pass output (background, no reprojection)" };
+                int view = (int) std::min(config->DlssNrTemporalDebugView.value_or_default(), 4u);
                 if (ImGui::Combo("Skipped frames show", &view, views, IM_ARRAYSIZE(views)))
                     config->DlssNrTemporalDebugView = (uint32_t) view;
                 HelpMarker("Diagnostic. 'Raw frame' shows skipped frames with no edit at all: if a glitch disappears there, it comes from the reprojected edit.");

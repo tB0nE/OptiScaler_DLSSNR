@@ -452,6 +452,8 @@ struct AsyncJob
     ID3D12Resource* motion = nullptr;
     ID3D12Resource* acc = nullptr;      // the machine's accumulated displacement, as the model's motion
     ID3D12Resource* exposure = nullptr; // the game's exposure value, copied through the meter pass
+    ID3D12Resource* shown = nullptr;    // diagnostic: a snapshot of the last finished pass, for the debug view
+    D3D12_RESOURCE_STATES shownState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES tgtState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES depthState = D3D12_RESOURCE_STATE_COMMON;
     D3D12_RESOURCE_STATES motionState = D3D12_RESOURCE_STATE_COMMON;
@@ -515,7 +517,7 @@ struct AsyncJob
             if (al != nullptr)
                 al->Release();
 
-        for (ID3D12Resource* r : { tgt, depth, motion, acc, exposure })
+        for (ID3D12Resource* r : { tgt, depth, motion, acc, exposure, shown })
             if (r != nullptr)
                 r->Release();
 
@@ -1847,7 +1849,8 @@ AsyncJob* EnsureAsyncJob(ID3D12Device* device, const D3D12_RESOURCE_DESC& tgtDes
     if (!make(tgtDesc, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, &job->tgt) ||
         !make(depthDesc, depthDesc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL, &job->depth) ||
         !make(motionDesc, D3D12_RESOURCE_FLAG_NONE, &job->motion) ||
-        !make(accDesc, D3D12_RESOURCE_FLAG_NONE, &job->acc))
+        !make(accDesc, D3D12_RESOURCE_FLAG_NONE, &job->acc) ||
+        !make(tgtDesc, D3D12_RESOURCE_FLAG_NONE, &job->shown))
         return nullptr;
 
     job->exposure = CreateScratch(device, DXGI_FORMAT_R32_FLOAT, 1, 1);
@@ -2132,6 +2135,16 @@ bool DlssNr_Dx12::AsyncDispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resour
                 DlssNr::Temporal::Residual(cmdList, adopt, a->tgt, a->tgtState);
                 DlssNr::Temporal::PromotePending();
 
+                if (cfg.DlssNrTemporalDebugView.value_or_default() == 4)
+                {
+                    Barrier(cmdList, a->tgt, a->tgtState, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                    Barrier(cmdList, a->shown, a->shownState, D3D12_RESOURCE_STATE_COPY_DEST);
+                    cmdList->CopyResource(a->shown, a->tgt);
+                    Barrier(cmdList, a->shown, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+                    a->shownState = D3D12_RESOURCE_STATE_COPY_SOURCE;
+                    Barrier(cmdList, a->tgt, D3D12_RESOURCE_STATE_COPY_SOURCE, a->tgtState);
+                }
+
                 ++a->passes;
                 a->ageSum += a->age;
 
@@ -2155,7 +2168,8 @@ bool DlssNr_Dx12::AsyncDispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resour
 
         a->exposureValid = false;
 
-        if (willKick && frame.ExposureTexture != nullptr && cfg.DlssNrWhitePointSource.value_or_default() == 1)
+        if (willKick && frame.ExposureTexture != nullptr && cfg.DlssNrWhitePointSource.value_or_default() == 1 &&
+            cfg.DlssNrTemporalBgExposure.value_or_default())
         {
             ID3D12Resource* const expo = (ID3D12Resource*) frame.ExposureTexture;
             DlssNrConstants meter {};
@@ -2288,7 +2302,14 @@ bool DlssNr_Dx12::AsyncDispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resour
     ++a->sinceKick;
 
     // 4. The frame the game gets: its own colour plus the reprojected edit of the last finished pass.
-    if (DlssNr::Temporal::HasResidual())
+    if (cfg.DlssNrTemporalDebugView.value_or_default() == 4 && a->shownState == D3D12_RESOURCE_STATE_COPY_SOURCE)
+    {
+        // Diagnostic: the last finished pass's own output, as it is.
+        Barrier(cmdList, target, targetState, D3D12_RESOURCE_STATE_COPY_DEST);
+        targetState = D3D12_RESOURCE_STATE_COPY_DEST;
+        cmdList->CopyResource(target, a->shown);
+    }
+    else if (DlssNr::Temporal::HasResidual())
     {
         ScopedNrStateEnvelope envelope(cmdList);
         DlssNr::Temporal::Reproject(cmdList, host, target, targetState);

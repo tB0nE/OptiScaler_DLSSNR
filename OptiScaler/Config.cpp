@@ -357,6 +357,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrTemporalEvery.set_from_config(readUInt("DlssNr", "TemporalEvery"));
             DlssNrTemporalBackground.set_from_config(readBool("DlssNr", "TemporalBackground"));
             DlssNrTemporalBlend.set_from_config(readFloat("DlssNr", "TemporalBlend"));
+            DlssNrTemporalBgExposure.set_from_config(readBool("DlssNr", "TemporalBgExposure"));
             DlssNrTemporalCatmullRom.set_from_config(readBool("DlssNr", "TemporalCatmullRom"));
             DlssNrTemporalHoleFill.set_from_config(readBool("DlssNr", "TemporalHoleFill"));
             DlssNrTemporalColorTolerance.set_from_config(readFloat("DlssNr", "TemporalColorTolerance"));
@@ -1305,6 +1306,7 @@ bool Config::SaveIni()
     ini.SetValue("DlssNr", "TemporalEvery", GetIntValue(Instance()->DlssNrTemporalEvery.value_for_config()).c_str());
     ini.SetValue("DlssNr", "TemporalBackground", GetBoolValue(Instance()->DlssNrTemporalBackground.value_for_config()).c_str());
     ini.SetValue("DlssNr", "TemporalBlend", GetFloatValue(Instance()->DlssNrTemporalBlend.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "TemporalBgExposure", GetBoolValue(Instance()->DlssNrTemporalBgExposure.value_for_config()).c_str());
     ini.SetValue("DlssNr", "TemporalCatmullRom", GetBoolValue(Instance()->DlssNrTemporalCatmullRom.value_for_config()).c_str());
     ini.SetValue("DlssNr", "TemporalHoleFill", GetBoolValue(Instance()->DlssNrTemporalHoleFill.value_for_config()).c_str());
     ini.SetValue("DlssNr", "TemporalColorTolerance", GetFloatValue(Instance()->DlssNrTemporalColorTolerance.value_for_config()).c_str());
