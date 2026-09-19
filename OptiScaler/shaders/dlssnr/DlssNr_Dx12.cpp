@@ -1863,39 +1863,67 @@ AsyncJob* EnsureAsyncJob(ID3D12Device* device, ID3D12CommandQueue* hostQueue, co
     return g_async.get();
 }
 
+// Every reason the background mode declines a frame is otherwise silent; say each distinct one once.
+bool AsyncDecline(const char* why)
+{
+    static std::set<std::string> seen;
+
+    if (seen.insert(why).second)
+        LOG_WARN("DLSS-NR background: not used -- {}", why);
+
+    return false;
+}
+
 bool DlssNr_Dx12::AsyncDispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* colour,
                                 ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* output,
                                 const DlssNrFrameInfo& frame, ID3D12CommandQueue* timingQueue)
 {
     (void) colour;
-    (void) timingQueue;
     const Config& cfg = *Config::Instance();
 
+    // Off by choice: silent.
     if (g_asyncFailed || g_nr.failed || !cfg.DlssNrTemporalEnabled.value_or_default() ||
-        !cfg.DlssNrTemporalBackground.value_or_default() || frame.BeforeUpscale ||
-        cfg.DlssNrUseProxy.value_or_default() || cmdList == nullptr || depth == nullptr || motion == nullptr ||
-        output == nullptr)
+        !cfg.DlssNrTemporalBackground.value_or_default())
         return false;
+
+    static bool announced = false;
+
+    if (!announced)
+    {
+        announced = true;
+        LOG_INFO("DLSS-NR background: enabled, checking whether this frame can use it");
+    }
+
+    if (frame.BeforeUpscale)
+        return AsyncDecline("the placement is before the upscaler (needs after SR)");
+
+    if (cfg.DlssNrUseProxy.value_or_default())
+        return AsyncDecline("the driver-proxy backend is on");
+
+    if (cmdList == nullptr || depth == nullptr || motion == nullptr || output == nullptr)
+        return AsyncDecline("a resource was missing");
 
     if (cmdList->GetType() != D3D12_COMMAND_LIST_TYPE_DIRECT)
-        return false;
+        return AsyncDecline("the game's list is not a direct list");
 
-    ID3D12CommandQueue* const hostQueue = (ID3D12CommandQueue*) State::Instance().currentCommandQueue;
+    // The queue the caller says the list runs on, else the swapchain's present queue.
+    ID3D12CommandQueue* const hostQueue =
+        timingQueue != nullptr ? timingQueue : (ID3D12CommandQueue*) State::Instance().currentCommandQueue;
 
     if (hostQueue == nullptr)
-        return false;
+        return AsyncDecline("the game's command queue is not known yet");
 
     const bool restoreRequired = cfg.RestoreComputeSignature.value_or_default() ||
                                  cfg.RestoreGraphicSignature.value_or_default();
 
     if (restoreRequired && !frame.IndependentCommands && !D3D12Hooks::CanRestoreRootSignature(cmdList))
-        return false;
+        return AsyncDecline("the game's root signature could not be restored this frame");
 
     ID3D12Resource* const target = output;
     Microsoft::WRL::ComPtr<ID3D12Device> device;
 
     if (FAILED(target->GetDevice(IID_PPV_ARGS(&device))) || device == nullptr)
-        return false;
+        return AsyncDecline("the output belongs to no device");
 
     const D3D12_RESOURCE_DESC desc = target->GetDesc();
     const DXGI_FORMAT tf = desc.Format;
@@ -1903,8 +1931,11 @@ bool DlssNr_Dx12::AsyncDispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resour
                              tf == DXGI_FORMAT_R10G10B10A2_UNORM || tf == DXGI_FORMAT_R8G8B8A8_UNORM ||
                              tf == DXGI_FORMAT_B8G8R8A8_UNORM || tf == DXGI_FORMAT_R32G32B32A32_FLOAT;
 
-    if (!typedColour || (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) == 0)
-        return false;
+    if (!typedColour)
+        return AsyncDecline("the output format is not one the reprojection can render into");
+
+    if ((desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) == 0)
+        return AsyncDecline("the output texture has no UAV support");
 
     const unsigned int width = (unsigned int) desc.Width;
     const unsigned int height = desc.Height;
@@ -1919,7 +1950,7 @@ bool DlssNr_Dx12::AsyncDispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resour
         frame.MotionSubrectBaseX, frame.MotionSubrectBaseY);
 
     if (!guides.depth.valid() || !guides.motion.valid())
-        return false;
+        return AsyncDecline("the depth or motion subrect is empty");
 
     AsyncJob* const a = EnsureAsyncJob(device.Get(), hostQueue, desc, guideDesc, motionDesc);
 
