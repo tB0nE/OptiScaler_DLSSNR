@@ -252,6 +252,14 @@ struct NrState
     unsigned int warpModelWidth = 0;
     unsigned int warpModelHeight = 0;
 
+    // Two-channel copy of the game's motion vectors, for when the game's own (ray tracing: four
+    // channel) format is not one the warp's SDK can read. Persistent; left readable between frames,
+    // so warpMotionReadable says which state it is really in.
+    ID3D12Resource* warpMotion = nullptr;
+    unsigned int warpMotionWidth = 0;
+    unsigned int warpMotionHeight = 0;
+    bool warpMotionReadable = false;
+
     // The frame as the upscaler wrote it. The resolve adds the model's edit to this rather than
     // reconstructing it by inverting the tone curve, which is what turned every light in the frame into
     // a string of coloured cells.
@@ -1885,6 +1893,10 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             ParkNrResource(g_nr.warpModelOutput);
             g_nr.warpModelWidth = 0;
             g_nr.warpModelHeight = 0;
+            ParkNrResource(g_nr.warpMotion);
+            g_nr.warpMotionWidth = 0;
+            g_nr.warpMotionHeight = 0;
+            g_nr.warpMotionReadable = false;
             g_nr.passScratchFailed = false;
             g_nr.warpUnpackTargetFailed = false;
         }
@@ -2657,12 +2669,57 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         }
     }
 
+    // The warp's SDK reads only two-channel motion. With ray tracing the game writes a four-channel
+    // texture, so convert it (the same pass that normalises motion for frame generation, at unit
+    // scale so the values stay exactly what the model would have read).
+    ID3D12Resource* warpMotionSource = motionIn;
+
+    if (g_nr.warpUnpackTarget != nullptr && DlssNr::PeripheralWarp::Enabled() &&
+        !DlssNr::PeripheralWarp::MotionFormatSupported(motionIn->GetDesc().Format))
+    {
+        const D3D12_RESOURCE_DESC md = motionIn->GetDesc();
+
+        if (g_nr.warpMotion == nullptr || g_nr.warpMotionWidth != (unsigned int) md.Width ||
+            g_nr.warpMotionHeight != md.Height)
+        {
+            ParkNrResource(g_nr.warpMotion);
+            g_nr.warpMotion = CreateScratch(device, DXGI_FORMAT_R16G16_FLOAT, (unsigned int) md.Width, md.Height);
+            g_nr.warpMotionWidth = (unsigned int) md.Width;
+            g_nr.warpMotionHeight = md.Height;
+            g_nr.warpMotionReadable = false;
+        }
+
+        if (g_nr.warpMotion != nullptr)
+        {
+            if (g_nr.warpMotionReadable)
+                Barrier(cmdList, g_nr.warpMotion, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+            DlssNrConstants convert {};
+            convert.Mode = DlssNrMode_NormalizeMotion;
+            convert.Width = (unsigned int) md.Width;
+            convert.Height = md.Height;
+            convert.MvScaleX = 1.0f;
+            convert.MvScaleY = 1.0f;
+
+            const bool converted = DispatchPass(cmdList, convert, motionIn, nullptr, nullptr, nullptr, nullptr,
+                                                g_nr.warpMotion, nullptr);
+
+            Barrier(cmdList, g_nr.warpMotion, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            g_nr.warpMotionReadable = true;
+
+            if (converted)
+                warpMotionSource = g_nr.warpMotion;
+        }
+    }
+
     bool warpActive = g_nr.warpUnpackTarget != nullptr &&
         DlssNr::PeripheralWarp::Enabled() &&
         DlssNr::PeripheralWarp::Pack(
             device, cmdList, passInput, desc.Format, workWidth, workHeight,
             depthIn, depthIn->GetDesc().Format, depthBaseX, depthBaseY, guideWidth, guideHeight,
-            motionIn, motionIn->GetDesc().Format, motionBaseX, motionBaseY, motionWidth, motionHeight,
+            warpMotionSource, warpMotionSource->GetDesc().Format, motionBaseX, motionBaseY, motionWidth, motionHeight,
             g_nr.guideMvScaleX * mvToWorkX, g_nr.guideMvScaleY * mvToWorkY, g_nr.guideDepthInverted,
             &warpedColor, &warpedDepth, &warpedMotion, &warpWidth, &warpHeight);
 
@@ -3688,6 +3745,14 @@ void Shutdown()
         g_nr.warpModelOutput->Release();
         g_nr.warpModelOutput = nullptr;
     }
+
+    if (g_nr.warpMotion != nullptr)
+    {
+        g_nr.warpMotion->Release();
+        g_nr.warpMotion = nullptr;
+    }
+
+    g_nr.warpMotionReadable = false;
 
     g_nr.warpUnpackTargetFailed = false;
     DlssNr::PeripheralWarp::Shutdown();

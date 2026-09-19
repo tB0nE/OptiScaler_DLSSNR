@@ -27,6 +27,10 @@ bool Enabled();
 bool GetInfo(unsigned int* nativeWidth, unsigned int* nativeHeight, unsigned int* workWidth,
              unsigned int* workHeight);
 
+// True for the two-channel motion formats the SDK reads directly. Anything else (ray tracing
+// makes Cyberpunk write a four-channel motion texture) must be converted to R16G16_FLOAT first.
+bool MotionFormatSupported(DXGI_FORMAT format);
+
 // Releases the adapter and its resources. Call on device loss / shutdown / resolution change,
 // the same way the rest of NrState's D3D12 resources are torn down.
 void Shutdown();

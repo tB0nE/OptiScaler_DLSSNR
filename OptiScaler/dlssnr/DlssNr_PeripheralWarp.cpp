@@ -332,6 +332,12 @@ void Shutdown()
     g_retired.clear();
 }
 
+bool MotionFormatSupported(DXGI_FORMAT format)
+{
+    return format == DXGI_FORMAT_R16G16_FLOAT || format == DXGI_FORMAT_R32G32_FLOAT ||
+           format == DXGI_FORMAT_R16G16_SNORM || format == DXGI_FORMAT_R16G16_UNORM;
+}
+
 bool GetInfo(unsigned int* nativeWidth, unsigned int* nativeHeight, unsigned int* workWidth,
              unsigned int* workHeight)
 {
