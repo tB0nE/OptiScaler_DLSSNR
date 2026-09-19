@@ -51,7 +51,16 @@ struct State
     ID3D12Resource* lastPackedDepth = nullptr;
     ID3D12Resource* lastPackedMotion = nullptr;
     pw::DepthConvention lastDepthConvention = pw::DepthConvention::Normal;
+
+    // The CPU writes source descriptors and input constants at record time but the GPU reads them
+    // when the list executes, possibly several frames later. Each frame therefore gets its own
+    // pack set and its own unpack set out of a ring, never touching one still in flight.
+    // Sets [0, kRing) pack, [kRing, 2*kRing) unpack.
+    unsigned int frameCounter = 0;
+    unsigned int lastRing = 0;
 };
+
+constexpr unsigned int kRing = 8;
 
 State g_state;
 
@@ -85,6 +94,7 @@ void ShutdownInternal()
     g_state.packedNeedsTransitionIn = false;
     g_state.lastPackedDepth = nullptr;
     g_state.lastPackedMotion = nullptr;
+    g_state.frameCounter = 0;
     g_state.initialized = false;
     g_state.nativeWidth = 0;
     g_state.nativeHeight = 0;
@@ -153,7 +163,7 @@ bool EnsureInitialized(ID3D12Device* device, DXGI_FORMAT colorFormat, unsigned i
     shaders.unpackPixel = { g_state.unpackBytes.data(), g_state.unpackBytes.size() };
 
     const auto initStatus = g_state.adapter.Initialize(device, layout, packFormats, unpackFormats, shaders,
-                                                        /* framesInFlight */ 2, /* allocateConfidence */ false);
+                                                        /* framesInFlight */ 1, /* sourceSets */ 2 * kRing);
 
     if (initStatus != pw::AdapterStatus::Ok)
     {
@@ -273,7 +283,9 @@ bool Pack(
     // color/depth/motion arrive in NON_PIXEL_SHADER_RESOURCE (what this fork's compute path and
     // the model read them in). Pack's draw is a pixel shader, which may only read
     // PIXEL_SHADER_RESOURCE, so they are switched for the draw and restored right after.
-    if (g_state.adapter.WriteSourceDescriptorsV2(0, sources, description) != pw::AdapterStatus::Ok)
+    const unsigned int ring = g_state.frameCounter++ % kRing;
+
+    if (g_state.adapter.WriteSourceSetV2(ring, sources, description) != pw::AdapterStatus::Ok)
         return false;
 
     const auto packed = g_state.adapter.PackedViews(0);
@@ -316,7 +328,7 @@ bool Pack(
     srcToPixel[2].Transition.pResource = motion;
     cmdList->ResourceBarrier(3, srcToPixel);
 
-    const auto packStatus = g_state.adapter.RecordPack(cmdList, 0);
+    const auto packStatus = g_state.adapter.RecordPackFromSet(cmdList, 0, ring);
 
     D3D12_RESOURCE_BARRIER srcBack[3] { srcToPixel[0], srcToPixel[1], srcToPixel[2] };
     for (auto& b : srcBack)
@@ -335,6 +347,7 @@ bool Pack(
     g_state.lastPackedDepth = packed.resources.depth.resource;
     g_state.lastPackedMotion = packed.resources.motion.resource;
     g_state.lastDepthConvention = description.depthConvention;
+    g_state.lastRing = ring;
 
     *outColor = packed.resources.color.resource;
     *outDepth = packed.resources.depth.resource;
@@ -416,7 +429,9 @@ bool Unpack(
     workSources.motion = { packedMotion, DXGI_FORMAT_R16G16_FLOAT };
     workSources.confidence = { nullptr, DXGI_FORMAT_UNKNOWN };
 
-    if (g_state.adapter.WriteSourceDescriptorsV2(0, workSources, unpackInput) != pw::AdapterStatus::Ok)
+    const unsigned int unpackSet = kRing + g_state.lastRing;
+
+    if (g_state.adapter.WriteSourceSetV2(unpackSet, workSources, unpackInput) != pw::AdapterStatus::Ok)
     {
         restoreToNonPixel();
         return false;
@@ -434,7 +449,7 @@ bool Unpack(
     }
 
     const auto rtv = g_state.rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    const auto unpackStatus = g_state.adapter.RecordUnpackColor(cmdList, 0, rtv);
+    const auto unpackStatus = g_state.adapter.RecordUnpackColorFromSet(cmdList, 0, unpackSet, rtv, pw::DiagnosticOutlineNone);
 
     restoreToNonPixel();
 
