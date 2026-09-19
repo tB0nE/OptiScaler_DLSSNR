@@ -2732,8 +2732,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     float modelMvY = g_nr.guideMvScaleY * mvToWorkY;
     bool modelMotionIsAcc = false;
 
-    if (temporalActive && !interpolated && DlssNr::Temporal::AccValid() &&
-        DlssNr::Temporal::Acc() != nullptr)
+    if (temporalActive && !interpolated && cfg.DlssNrTemporalAccMotion.value_or_default() &&
+        DlssNr::Temporal::AccValid() && DlssNr::Temporal::Acc() != nullptr)
     {
         modelMotion = DlssNr::Temporal::Acc();
         modelMvX = mvToWorkX;

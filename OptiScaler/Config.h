@@ -430,6 +430,17 @@ class Config
     // reprojected along the game's motion vectors. After-SR placement only.
     CustomOptional<bool> DlssNrTemporalEnabled { false };
     CustomOptional<uint32_t> DlssNrTemporalEvery { 2 };
+    // Tuning of the reprojection (see the menu). Catmull-Rom sampling can overshoot around very
+    // bright edges, so it is off by default here.
+    CustomOptional<bool> DlssNrTemporalCatmullRom { false };
+    CustomOptional<bool> DlssNrTemporalHoleFill { true };
+    CustomOptional<float> DlssNrTemporalColorTolerance { 0.08f };
+    CustomOptional<float> DlssNrTemporalDepthTolerance { 0.05f };
+    CustomOptional<float> DlssNrTemporalSmoothRadius { 24.0f };
+    // The model is given the motion accumulated since its last full frame instead of one frame's.
+    CustomOptional<bool> DlssNrTemporalAccMotion { true };
+    // 0 normal, 1 displacement/weight, 2 residual, 3 the raw frame with no edit on skipped frames.
+    CustomOptional<uint32_t> DlssNrTemporalDebugView { 0 };
 
     // Look for the exposure the game computed but never handed to the upscaler.
     //

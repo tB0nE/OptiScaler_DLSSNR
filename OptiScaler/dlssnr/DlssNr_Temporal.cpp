@@ -91,6 +91,14 @@ pwtemporal::FrameInputs Make(const FrameArgs& a)
     t.hostInputState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     t.depthState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     t.depthSubresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+
+    const auto& cfg = *Config::Instance();
+    t.residualCatmullRom = cfg.DlssNrTemporalCatmullRom.value_or_default();
+    t.holeFill = cfg.DlssNrTemporalHoleFill.value_or_default();
+    t.colorTolerance = cfg.DlssNrTemporalColorTolerance.value_or_default();
+    t.depthThreshold = cfg.DlssNrTemporalDepthTolerance.value_or_default();
+    t.smoothRadius = std::clamp(cfg.DlssNrTemporalSmoothRadius.value_or_default(), 0.0f, 128.0f);
+    t.debugVis = (int) std::min(cfg.DlssNrTemporalDebugView.value_or_default(), 3u);
     return t;
 }
 

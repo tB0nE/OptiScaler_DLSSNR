@@ -342,6 +342,47 @@ void RenderMenu(Config* config, float menuResScale)
 
             HelpMarker("2 = the model runs on every other frame (about half the model cost). Higher saves more and ghosts more.");
 
+            if (ImGui::TreeNode("Temporal tuning"))
+            {
+                bool catmull = config->DlssNrTemporalCatmullRom.value_or_default();
+                if (ImGui::Checkbox("Sharp resampling (Catmull-Rom)", &catmull))
+                    config->DlssNrTemporalCatmullRom = catmull;
+                HelpMarker("Keeps fine detail when the edit is moved, but can overshoot around very bright edges (dark halos, black highlights). Off = bilinear.");
+
+                bool holeFill = config->DlssNrTemporalHoleFill.value_or_default();
+                if (ImGui::Checkbox("Fill rejected pixels", &holeFill))
+                    config->DlssNrTemporalHoleFill = holeFill;
+                HelpMarker("Pixels the reprojection rejects (moved too far, newly revealed) get a blurred version of the edit instead of none.");
+
+                bool accMotion = config->DlssNrTemporalAccMotion.value_or_default();
+                if (ImGui::Checkbox("Accumulated motion for the model", &accMotion))
+                    config->DlssNrTemporalAccMotion = accMotion;
+                HelpMarker("After skipped frames the model is given the motion accumulated since its last run. Turn off to give it a single frame's motion.");
+
+                float colorTol = config->DlssNrTemporalColorTolerance.value_or_default();
+                if (ImGui::SliderFloat("Colour tolerance", &colorTol, 0.0f, 0.5f, "%.2f"))
+                    config->DlssNrTemporalColorTolerance = colorTol;
+                HelpMarker("How much a pixel's brightness may differ from the last full frame before its edit is rejected. 0 = never reject on colour.");
+
+                float depthTol = config->DlssNrTemporalDepthTolerance.value_or_default();
+                if (ImGui::SliderFloat("Depth tolerance", &depthTol, 0.0f, 0.5f, "%.3f"))
+                    config->DlssNrTemporalDepthTolerance = depthTol;
+                HelpMarker("Relative depth mismatch that counts as a newly revealed surface. 0 = never reject on depth.");
+
+                float smooth = config->DlssNrTemporalSmoothRadius.value_or_default();
+                if (ImGui::SliderFloat("Smoothing radius", &smooth, 0.0f, 64.0f, "%.0f px"))
+                    config->DlssNrTemporalSmoothRadius = smooth;
+                HelpMarker("How far the added edit is smoothed around rejected pixels. 0 = off.");
+
+                static const char* const views[] = { "Normal", "Displacement / weight", "The stored edit", "Raw frame (no edit)" };
+                int view = (int) std::min(config->DlssNrTemporalDebugView.value_or_default(), 3u);
+                if (ImGui::Combo("Skipped frames show", &view, views, IM_ARRAYSIZE(views)))
+                    config->DlssNrTemporalDebugView = (uint32_t) view;
+                HelpMarker("Diagnostic. 'Raw frame' shows skipped frames with no edit at all: if a glitch disappears there, it comes from the reprojected edit.");
+
+                ImGui::TreePop();
+            }
+
             ImGui::TreePop();
         }
 

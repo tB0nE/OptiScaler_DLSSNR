@@ -355,6 +355,13 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrPeripheralWarpDebug.set_from_config(readUInt("DlssNr", "PeripheralWarpDebug"));
             DlssNrTemporalEnabled.set_from_config(readBool("DlssNr", "TemporalEnabled"));
             DlssNrTemporalEvery.set_from_config(readUInt("DlssNr", "TemporalEvery"));
+            DlssNrTemporalCatmullRom.set_from_config(readBool("DlssNr", "TemporalCatmullRom"));
+            DlssNrTemporalHoleFill.set_from_config(readBool("DlssNr", "TemporalHoleFill"));
+            DlssNrTemporalColorTolerance.set_from_config(readFloat("DlssNr", "TemporalColorTolerance"));
+            DlssNrTemporalDepthTolerance.set_from_config(readFloat("DlssNr", "TemporalDepthTolerance"));
+            DlssNrTemporalSmoothRadius.set_from_config(readFloat("DlssNr", "TemporalSmoothRadius"));
+            DlssNrTemporalAccMotion.set_from_config(readBool("DlssNr", "TemporalAccMotion"));
+            DlssNrTemporalDebugView.set_from_config(readUInt("DlssNr", "TemporalDebugView"));
             DlssNrScanExposure.set_from_config(readBool("DlssNr", "ScanExposure"));
             DlssNrWhitePointSource.set_from_config(readUInt("DlssNr", "WhitePointSource"));
 
@@ -1294,6 +1301,13 @@ bool Config::SaveIni()
     ini.SetValue("DlssNr", "PeripheralWarpDebug", GetIntValue(Instance()->DlssNrPeripheralWarpDebug.value_for_config()).c_str());
     ini.SetValue("DlssNr", "TemporalEnabled", GetBoolValue(Instance()->DlssNrTemporalEnabled.value_for_config()).c_str());
     ini.SetValue("DlssNr", "TemporalEvery", GetIntValue(Instance()->DlssNrTemporalEvery.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "TemporalCatmullRom", GetBoolValue(Instance()->DlssNrTemporalCatmullRom.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "TemporalHoleFill", GetBoolValue(Instance()->DlssNrTemporalHoleFill.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "TemporalColorTolerance", GetFloatValue(Instance()->DlssNrTemporalColorTolerance.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "TemporalDepthTolerance", GetFloatValue(Instance()->DlssNrTemporalDepthTolerance.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "TemporalSmoothRadius", GetFloatValue(Instance()->DlssNrTemporalSmoothRadius.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "TemporalAccMotion", GetBoolValue(Instance()->DlssNrTemporalAccMotion.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "TemporalDebugView", GetIntValue(Instance()->DlssNrTemporalDebugView.value_for_config()).c_str());
     ini.SetValue("DlssNr", "ProxyProbe", GetBoolValue(Instance()->DlssNrProxyProbe.value_for_config()).c_str());
     // ScanExposure is a developer override with no menu control; persist it so a set ini keeps it.
     ini.SetValue("DlssNr", "ScanExposure", GetBoolValue(Instance()->DlssNrScanExposure.value_for_config()).c_str());
