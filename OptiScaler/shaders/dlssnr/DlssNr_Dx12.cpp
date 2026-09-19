@@ -245,6 +245,13 @@ struct NrState
     ID3D12Resource* warpUnpackTarget = nullptr;
     bool warpUnpackTargetFailed = false;
 
+    // The model's answer for a warped pass 0. Must be exactly the warped extent: Unpack treats
+    // its colour source as being that size, so writing into the top-left of a larger texture
+    // (g_nr.output) shrinks the picture toward the corner with black bars.
+    ID3D12Resource* warpModelOutput = nullptr;
+    unsigned int warpModelWidth = 0;
+    unsigned int warpModelHeight = 0;
+
     // The frame as the upscaler wrote it. The resolve adds the model's edit to this rather than
     // reconstructing it by inverting the tone curve, which is what turned every light in the frame into
     // a string of coloured cells.
@@ -1875,6 +1882,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             ParkNrResource(g_nr.outputNative);
             ParkNrResource(g_nr.activeColor);
             ParkNrResource(g_nr.warpUnpackTarget);
+            ParkNrResource(g_nr.warpModelOutput);
+            g_nr.warpModelWidth = 0;
+            g_nr.warpModelHeight = 0;
             g_nr.passScratchFailed = false;
             g_nr.warpUnpackTargetFailed = false;
         }
@@ -2588,6 +2598,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // even be null, when Passes==1, while warp is still in play). Without its own bit it would
     // silently alias passScratch's tracked state on every == g_nr.output check below.
     bool warpReadable = false;
+    bool warpModelReadable = false;
 
     const auto TrackedReadableFlag = [&](ID3D12Resource* resource) -> bool&
     {
@@ -2595,6 +2606,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             return outputReadable;
         if (resource == g_nr.warpUnpackTarget)
             return warpReadable;
+        if (resource == g_nr.warpModelOutput)
+            return warpModelReadable;
         return scratchReadable;
     };
 
@@ -2632,7 +2645,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     ID3D12Resource* warpedMotion = nullptr;
     unsigned int warpWidth = 0;
     unsigned int warpHeight = 0;
-    const bool warpActive = g_nr.warpUnpackTarget != nullptr &&
+    bool warpActive = g_nr.warpUnpackTarget != nullptr &&
         DlssNr::PeripheralWarp::Enabled() &&
         DlssNr::PeripheralWarp::Pack(
             device, cmdList, passInput, desc.Format, workWidth, workHeight,
@@ -2640,6 +2653,25 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             motionIn, motionIn->GetDesc().Format, motionBaseX, motionBaseY, motionWidth, motionHeight,
             g_nr.guideMvScaleX * mvToWorkX, g_nr.guideMvScaleY * mvToWorkY, g_nr.guideDepthInverted,
             &warpedColor, &warpedDepth, &warpedMotion, &warpWidth, &warpHeight);
+
+    if (warpActive &&
+        (g_nr.warpModelOutput == nullptr || g_nr.warpModelWidth != warpWidth ||
+         g_nr.warpModelHeight != warpHeight))
+    {
+        ParkNrResource(g_nr.warpModelOutput);
+        g_nr.warpModelOutput = CreateScratch(device, desc.Format, warpWidth, warpHeight);
+        g_nr.warpModelWidth = warpWidth;
+        g_nr.warpModelHeight = warpHeight;
+        warpModelReadable = false;
+
+        if (g_nr.warpModelOutput == nullptr)
+        {
+            LOG_ERROR("DLSS-NR: could not allocate the {}x{} PeripheralWarp model output; "
+                      "running this frame unwarped",
+                      warpWidth, warpHeight);
+            warpActive = false;
+        }
+    }
 
     int result = NVSDK_NGX_Result_Success;
 
@@ -2655,13 +2687,15 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         // shows on screen is purely the warp's geometry round trip.
         const bool warpRoundTripOnly = warpThisPass && cfg.DlssNrPeripheralWarpDebug.value_or_default() == 1;
 
-        MakeModelWritable(passOutput);
+        ID3D12Resource* const evalOutput = warpThisPass ? g_nr.warpModelOutput : passOutput;
+
+        MakeModelWritable(evalOutput);
         result = warpRoundTripOnly ? NVSDK_NGX_Result_Success : g_nr.evaluate(
             cmdList, passFeature, g_nr.capabilityParams,
             warpThisPass ? warpedColor : passInput,
             warpThisPass ? warpedDepth : depthIn,
             warpThisPass ? warpedMotion : motionIn,
-            passOutput,
+            evalOutput,
             warpThisPass ? warpWidth : workWidth, warpThisPass ? warpHeight : workHeight,
             warpThisPass ? warpWidth : guideWidth, warpThisPass ? warpHeight : guideHeight,
             warpThisPass ? warpWidth : motionWidth, warpThisPass ? warpHeight : motionHeight,
@@ -2688,9 +2722,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             // warpUnpackTarget before treating it as finalAnswer, so pass 1+ and every consumer
             // past this loop sees a full workWidth x workHeight answer -- nothing warp-shaped
             // leaks further downstream.
-            ID3D12Resource* const warpModelAnswer = warpRoundTripOnly ? warpedColor : passOutput;
+            ID3D12Resource* const warpModelAnswer = warpRoundTripOnly ? warpedColor : evalOutput;
             if (!warpRoundTripOnly)
-                MakeModelReadable(passOutput);
+                MakeModelReadable(evalOutput);
             MakeModelWritable(g_nr.warpUnpackTarget);
 
             const bool unpackOk = DlssNr::PeripheralWarp::Unpack(
@@ -2706,7 +2740,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                 // Leaving early, below the loop's own end-of-frame cleanup: restore what this
                 // pass already made readable back to the UAV state the next frame expects to
                 // find it in (see the matching restore after the loop, for the same reason).
-                MakeModelWritable(passOutput);
+                MakeModelWritable(evalOutput);
                 MakeModelWritable(g_nr.warpUnpackTarget);
                 FinishColor(false);
                 device->Release();
@@ -2949,6 +2983,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             MakeModelWritable(g_nr.passScratch);
         if (g_nr.warpUnpackTarget != nullptr)
             MakeModelWritable(g_nr.warpUnpackTarget);
+        if (g_nr.warpModelOutput != nullptr)
+            MakeModelWritable(g_nr.warpModelOutput);
 
         if (superDownOk)
             Barrier(cmdList, g_nr.outputNative, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -2989,6 +3025,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         MakeModelWritable(g_nr.passScratch);
     if (g_nr.warpUnpackTarget != nullptr)
         MakeModelWritable(g_nr.warpUnpackTarget);
+    if (g_nr.warpModelOutput != nullptr)
+        MakeModelWritable(g_nr.warpModelOutput);
 
     Barrier(cmdList, g_nr.hdrCopy, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -3631,6 +3669,12 @@ void Shutdown()
     {
         g_nr.warpUnpackTarget->Release();
         g_nr.warpUnpackTarget = nullptr;
+    }
+
+    if (g_nr.warpModelOutput != nullptr)
+    {
+        g_nr.warpModelOutput->Release();
+        g_nr.warpModelOutput = nullptr;
     }
 
     g_nr.warpUnpackTargetFailed = false;
