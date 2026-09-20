@@ -65,6 +65,10 @@ DLSS_FILES = ["nvngx_dlss.dll", "nvngx_dlssd.dll", "nvngx_dlssg.dll"]
 PROXY_NAMES = ["dxgi.dll", "version.dll", "winmm.dll", "dbghelp.dll", "d3d12.dll", "dinput8.dll"]
 ANTICHEAT = ["easyanticheat", "battleye", "beclient", "xigncode", "eac_launcher"]
 # Online-only games where modding risks a ban, however the file scan looks.
+# Files the game or the user legitimately change after install; never treated as "tampered with".
+MUTABLE_FILES = {"OptiScaler.ini", "dlssg_sm86.ini"}
+# Runtime output the game creates in its exe folder; removed on uninstall unless it was there before.
+ARTIFACTS = ["OptiScaler.log", "dlssg_sm86"]
 KNOWN_ONLINE = {"2344520": "Diablo IV is online-only (Blizzard); modding can get an account banned"}
 
 
@@ -427,9 +431,11 @@ def main_exe(game: Game) -> Path | None:
     return pick_exe(game.path, game.exe_hint)
 
 
-def scan_exe(path: Path) -> dict:
+def scan_exe(path: Path, keys: list[str] | None = None) -> dict:
     needles = {"d3d12": "d3d12.dll", "d3d11": "d3d11.dll", "vulkan": "vulkan-1.dll",
                "nvngx": "nvngx", "nvapi": "nvapi64"}
+    if keys is not None:
+        needles = {k: v for k, v in needles.items() if k in keys}
     res = {k: False for k in needles}
 
     def both(text: str) -> bytes:  # the name as narrow text or as UTF-16 text
@@ -454,7 +460,6 @@ def assess(game: Game, exe_override: Path | None = None) -> dict:
         return a
     exe_dir = exe.parent
     a["exe_dir"] = exe_dir
-    a["scan"] = scan_exe(exe)
     names = {p.name.lower() for p in exe_dir.iterdir()} if exe_dir.is_dir() else set()
     a["streamline"] = [f for f in STREAMLINE_FILES if f in names]
     a["dlss_files"] = [f for f in DLSS_FILES if f in names]
@@ -462,13 +467,20 @@ def assess(game: Game, exe_override: Path | None = None) -> dict:
     a["has_dlss_g"] = "sl.dlss_g.dll" in names or "nvngx_dlssg.dll" in names
     top = {p.name.lower() for p in game.path.iterdir()} if game.path.is_dir() else set()
     a["anticheat"] = sorted({ac for ac in ANTICHEAT for n in (names | top) if ac in n})
-    s = a["scan"]
-    dx12 = s["d3d12"] or a["has_dlss_g"] or (exe_dir / "D3D12").is_dir() or (exe_dir / "d3d12").is_dir() \
+    dx12_hint = a["has_dlss_g"] or (exe_dir / "D3D12").is_dir() or (exe_dir / "d3d12").is_dir() \
         or (exe_dir / "D3D12Core.dll").exists()
+    dlss_hint = bool(a["dlss_files"] or a["streamline"])
+    # Reading the whole exe is the slow part: only do it for what the folder's files did not settle.
+    need = [k for k, hinted in (("d3d12", dx12_hint), ("nvngx", dlss_hint)) if not hinted]
+    s = {"d3d12": False, "nvngx": False, **(scan_exe(exe, need) if need else {})}
+    a["scan"] = s
+    dx12 = dx12_hint or s["d3d12"]
+    dlss = dlss_hint or s["nvngx"]
     a["dx12"] = dx12
+    a["dlss"] = dlss
     if not dx12:
         a["notes"].append("does not look like a DirectX 12 game")
-    if not (a["dlss_files"] or s["nvngx"] or a["streamline"]):
+    if not dlss:
         a["notes"].append("no sign of DLSS (needs DLSS SR/RR to hook into)")
     if a["anticheat"]:
         a["notes"].append("anti-cheat present: " + ", ".join(a["anticheat"]))
@@ -479,7 +491,7 @@ def assess(game: Game, exe_override: Path | None = None) -> dict:
                             game.prefix / "drive_c/windows/syswow64/dxgi.dll") if p.exists()]
         a["notes"].append("prefix dxgi.dll (DXVK): " + (", ".join(str(p.relative_to(game.prefix))
                           for p in dxvk) if dxvk else "none (OptiScaler's dxgi.dll will be the only one)"))
-    a["ok"] = dx12 and bool(a["dlss_files"] or s["nvngx"] or a["streamline"]) and not a["anticheat"] \
+    a["ok"] = dx12 and dlss and not a["anticheat"] \
         and game.appid not in KNOWN_ONLINE
     return a
 
@@ -897,6 +909,7 @@ def do_install(game: Game, a: dict, plan: dict, args) -> int:
     created_dirs: list[str] = []
     reg_rec = None
     reg_backup = None
+    pre_artifacts = [n for n in ARTIFACTS if (exe_dir / n).exists()]
     try:
         mdir.mkdir(parents=True, exist_ok=True)
         for f in plan["files"]:
@@ -938,6 +951,7 @@ def do_install(game: Game, a: dict, plan: dict, args) -> int:
         "game": game.name, "appid": game.appid, "exe": str(a["exe"].relative_to(game.path)),
         "exe_dir": str(exe_dir.relative_to(game.path)), "profile": plan["profile"], "fg": plan["fg"],
         "kit": str(kit_dir()), "created_dirs": created_dirs, "registry": reg_rec,
+        "pre_existing_artifacts": pre_artifacts,
         "files": [{k: v for k, v in f.items() if k not in ("content", "src")} for f in plan["files"]],
     }
     manifest_path(game).write_text(json.dumps(manifest, indent=2))
@@ -984,7 +998,7 @@ def cmd_uninstall(args) -> int:
             continue
         if not dst.exists():
             problems.append(f"missing: {f['rel']}")
-        elif sha256(dst) != f["sha256"] and not args.force:
+        elif f["rel"] not in MUTABLE_FILES and sha256(dst) != f["sha256"] and not args.force:
             problems.append(f"changed since install: {f['rel']} (use --force to remove/restore anyway)")
         actions.append(f)
     reg = m.get("registry")
@@ -1013,6 +1027,13 @@ def cmd_uninstall(args) -> int:
             Path(d).rmdir()
         except OSError:
             pass
+    pre = m.get("pre_existing_artifacts")
+    for n in (["OptiScaler.log"] if pre is None else [x for x in ARTIFACTS if x not in pre]):
+        t = exe_dir / n
+        if t.is_dir():
+            shutil.rmtree(t, ignore_errors=True)
+        elif t.exists():
+            t.unlink()
     if reg:
         ureg = Path(reg["file"])
         if sha256(ureg) == reg["sha256_after"] and (mdir / reg["backup"]).exists():
@@ -1043,7 +1064,10 @@ def cmd_verify(args) -> int:
             info(f"  FAIL  missing {f['rel']}")
             bad += 1
         elif f["action"] != "identical" and sha256(dst) != f["sha256"]:
-            info(f"  WARN  changed {f['rel']}")
+            if f["rel"] in MUTABLE_FILES:
+                info(f"  info  {f['rel']} was changed since install (settings; expected)")
+            else:
+                info(f"  WARN  changed {f['rel']}")
     info(f"  files: {'ok' if not bad else str(bad) + ' problem(s)'}")
 
     log = exe_dir / "OptiScaler.log"
@@ -1320,16 +1344,329 @@ def cmd_selftest(args) -> int:
         check(rc == 0, "lutris: uninstall --apply succeeds")
         check(tree_hash(game_a) == before_a, "lutris: game folder byte-identical after uninstall")
         check(reg_a.read_bytes() == reg_a_before, "lutris: registry restored byte-for-byte")
+
+        # the interactive menu, driven by scripted answers
+        import builtins
+        import contextlib
+        import io
+
+        def drive(answers: list[str]) -> str:
+            it = iter(answers)
+            real = builtins.input
+            builtins.input = lambda prompt="": next(it)
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    rc = run_menu()
+            except StopIteration:
+                rc = -1
+            finally:
+                builtins.input = real
+            return buf.getvalue() if rc == 0 else buf.getvalue() + "\n<<menu did not exit cleanly>>"
+
+        before_m = tree_hash(game)
+        reg_m_before = (prefix / "user.reg").read_bytes()
+        out = drive(["3"])
+        check("Install Game" in out and "Modify Game" in out and "Exit" in out and "Currently installed" in out
+              and "(none)" in out, "menu: shows Install/Modify/Exit and an empty installed list")
+        out = drive(["1", "0", "3"])
+        check("Steam" in out and "Fake Game" in out and "Lutris" in out and "Fake Lutris" in out,
+              "menu: install list shows Steam games then Lutris games")
+        check(out.index("Steam") < out.index("Lutris"), "menu: Steam group comes before Lutris")
+        out = drive(["1", "1", "2", "2", "y", "y", "3"])
+        check((exe_dir / "dxgi.dll").exists() and (exe_dir / "version.dll").exists(),
+              "menu: guided install put the proxy and the frame-gen mod in place")
+        check("PeripheralWarpCenterX = 59" in (exe_dir / "OptiScaler.ini").read_text(errors="replace"),
+              "menu: chosen warp preset written to the ini")
+        out = drive(["3"])
+        check("Fake Game [steam]" in out and "warp" in out, "menu: installed game listed on the main screen")
+        drive(["2", "1", "2", "3", "", "0", "0", "3"])
+        check("PeripheralWarpCenterX = 28" in (exe_dir / "OptiScaler.ini").read_text(errors="replace"),
+              "menu: warp settings changed in place")
+        drive(["2", "1", "4", "y", "", "3"])
+        check(tree_hash(game) == before_m, "menu: uninstall leaves the game folder byte-identical "
+              "(even though the ini was edited)")
+        check((prefix / "user.reg").read_bytes() == reg_m_before, "menu: registry restored byte-for-byte")
+        out = drive(["1", "1", "2", "2", "y", "n", "3"])
+        check(not (exe_dir / "dxgi.dll").exists(), "menu: declining the confirmation installs nothing")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("SELFTEST " + ("PASSED" if ok else "FAILED"))
     return 0 if ok else 1
 
 
+# ----------------------------------------------------------------------------- interactive menu
+class Quit(Exception):
+    pass
+
+
+def ask(prompt: str) -> str:
+    try:
+        return input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        raise Quit
+
+
+def choose(title: str, options: list[str], back: str = "Back", extra: str = "") -> int | str | None:
+    """Numbered list. Returns the 0-based index, None for back, or the raw text when it is in `extra`."""
+    info(f"\n{title}")
+    for i, o in enumerate(options, 1):
+        info(f"  {i}) {o}")
+    info(f"  0) {back}")
+    while True:
+        s = ask("> ")
+        if s == "0" or s.lower() in ("b", "q"):
+            return None
+        if s.isdigit() and 1 <= int(s) <= len(options):
+            return int(s) - 1
+        if extra and s.lower() in extra:
+            return s.lower()
+        info("  please type one of the numbers above")
+
+
+def confirm(question: str, default: bool = False) -> bool:
+    s = ask(f"{question} [{'Y/n' if default else 'y/N'}] ").lower()
+    return default if not s else s.startswith("y")
+
+
+def installed_games() -> list[tuple[Game, dict]]:
+    out = []
+    for g in games():
+        try:
+            m = load_manifest(g)
+        except (OSError, ValueError):
+            m = None
+        if m:
+            out.append((g, m))
+    return out
+
+
+def describe_install(m: dict) -> str:
+    return f"{m.get('profile', '?')}, frame gen {m.get('fg', '?')}"
+
+
+def run_quietly(fn, *a) -> int:
+    """Run a command function; its die() (SystemExit) becomes a message instead of ending the menu."""
+    try:
+        return fn(*a)
+    except SystemExit as e:
+        if e.code not in (0, None) and not isinstance(e.code, int):
+            info(str(e.code))
+        return e.code if isinstance(e.code, int) else 2
+
+
+def scan_candidates() -> list[tuple[Game, dict]]:
+    gl = games()
+    installed = {g.appid for g, _ in installed_games()}
+    out = []
+    for n, g in enumerate(gl, 1):
+        print(f"\r  checking games {n}/{len(gl)} ", end="", flush=True)
+        if g.appid in installed:
+            continue
+        try:
+            out.append((g, assess(g)))
+        except Exception as e:  # one odd game folder must not break the list
+            out.append((g, {"ok": False, "exe": None, "notes": [f"could not be checked: {e}"]}))
+    print("\r" + " " * 40 + "\r", end="")
+    return out
+
+
+def pick_game_to_install(cache: dict) -> tuple[Game, dict] | None:
+    show_all = False
+    while True:
+        if "cands" not in cache:
+            cache["cands"] = scan_candidates()
+        cands = cache["cands"]
+        rows = [(g, a) for g, a in cands if a.get("exe") is not None and (show_all or a.get("ok"))]
+        steam = [r for r in rows if r[0].source == "steam"]
+        lutris = [r for r in rows if r[0].source == "lutris"]
+        ordered = sorted(steam, key=lambda r: r[0].name.lower()) + sorted(lutris, key=lambda r: r[0].name.lower())
+        info("\nInstall Game" + ("  (showing every game)" if show_all else "  (games that look suitable)"))
+        idx = 0
+        for title, group in (("Steam", steam), ("Lutris", lutris)):
+            info(f"\n  {title}")
+            if not group:
+                info("    (none)")
+            for g, a in sorted(group, key=lambda r: r[0].name.lower()):
+                idx += 1
+                tags = []
+                if a.get("has_dlss_g"):
+                    tags.append("frame gen")
+                if not a.get("ok"):
+                    tags.append("not suitable: " + "; ".join(a["notes"][:2]))
+                info(f"    {idx:>2}) {g.name}" + (f"   [{', '.join(tags)}]" if tags else ""))
+        info("\n   A) " + ("only suitable games" if show_all else "show every game, with reasons")
+             + "     R) rescan     0) back")
+        s = ask("> ").lower()
+        if s in ("0", "b", "q"):
+            return None
+        if s == "a":
+            show_all = not show_all
+        elif s == "r":
+            cache.pop("cands", None)
+        elif s.isdigit() and 1 <= int(s) <= len(ordered):
+            return ordered[int(s) - 1]
+        else:
+            info("  please type a number from the list, A, R or 0")
+
+
+PRESETS = [("Warp off (plain neural rendering)", "default"),
+           ("Warp, normal settings (59% centre / 80% work)", "warp"),
+           ("Warp, ray tracing (28% / 64%)", "warp-rt"),
+           ("Baldur's Gate 3 DX11 exe (bg3-dx11)", "bg3-dx11")]
+
+
+def install_flow(cache: dict) -> None:
+    picked = pick_game_to_install(cache)
+    if not picked:
+        return
+    g, a = picked
+    p = choose(f"{g.name}: which warp setting?", [n for n, _ in PRESETS], back="Cancel")
+    if p is None:
+        return
+    profile = PRESETS[p][1]
+    fgs = ["auto (frame gen only if the game supports it)", "on (install the frame-gen mod)", "off"]
+    f = choose("Frame generation?", fgs, back="Cancel")
+    if f is None:
+        return
+    fg = ["auto", "separate", "off"][f]
+    edit_reg = False
+    if g.prefix is not None:
+        info("\nThe DLL overrides can be written into the game's Wine prefix for you (backed up first,")
+        info("the game and Steam/Lutris must be closed). Otherwise you paste them in by hand.")
+        edit_reg = confirm("Write the overrides automatically?", True)
+    args = argparse.Namespace(game=g.appid, profile=profile, exe=None, prefix=None, fg=fg, set=None,
+                              edit_registry=edit_reg, force=False, apply=False)
+    info("")
+    rc = run_quietly(cmd_install, args)
+    if rc != 0:
+        info("\nNothing was installed.")
+        return
+    if not confirm("\nInstall this now?"):
+        info("cancelled, nothing changed")
+        return
+    args.apply = True
+    rc = run_quietly(cmd_install, args)
+    cache.pop("cands", None)
+    if rc == 0:
+        info("\nDone. Launch the game once, then use Modify Game > Verify to check that it loaded.")
+
+
+def set_warp(g: Game, m: dict) -> None:
+    ini = g.path / m["exe_dir"] / "OptiScaler.ini"
+    if not ini.exists():
+        info("OptiScaler.ini is missing")
+        return
+    if game_running(Path(m["exe"]).name):
+        info("The game is running; close it first.")
+        return
+    opts = [n for n, _ in PRESETS[:3]] + ["Custom values"]
+    c = choose("Warp setting", opts, back="Cancel")
+    if c is None:
+        return
+    if c < 3:
+        vals = PROFILES[PRESETS[c][1]]["DlssNr"]
+    else:
+        try:
+            cen = float(ask("Centre % (e.g. 28): "))
+            work = float(ask("Work % (e.g. 64): "))
+        except ValueError:
+            info("not a number")
+            return
+        if not (0 < cen < 100) or work < (100 + cen) / 2 or work > 100:
+            info(f"Work must be at least (100 + Centre) / 2 = {(100 + cen) / 2:g} and at most 100")
+            return
+        w = f"{work:g}" if work != (100 + cen) / 2 else f"{work + 0.01:g}"
+        vals = {"PeripheralWarpEnabled": "true", "PeripheralWarpCenterX": f"{cen:g}",
+                "PeripheralWarpCenterY": f"{cen:g}", "PeripheralWarpWorkX": w, "PeripheralWarpWorkY": w}
+    text = ini.read_bytes().decode("utf-8", errors="surrogateescape")
+    for k, v in vals.items():
+        if k.startswith("PeripheralWarp"):
+            text = set_ini(text, "DlssNr", k, v)
+    ini.write_bytes(text.encode("utf-8", errors="surrogateescape"))
+    info("Saved to OptiScaler.ini. It applies the next time the game starts.")
+
+
+def modify_flow(cache: dict) -> None:
+    while True:
+        inst = installed_games()
+        if not inst:
+            info("\nNothing is installed yet.")
+            return
+        i = choose("Modify Game: pick a game",
+                   [f"{g.name} [{g.source}]  ({describe_install(m)})" for g, m in inst])
+        if i is None:
+            return
+        g, m = inst[i]
+        while True:
+            act = choose(f"{g.name}  ({describe_install(m)})",
+                         ["Verify (after running the game once)", "Change warp settings",
+                          "Reinstall with different options", "Uninstall"])
+            if act is None:
+                break
+            if act == 0:
+                run_quietly(cmd_verify, argparse.Namespace(game=g.appid, kernel=True))
+            elif act == 1:
+                set_warp(g, m)
+            elif act == 2:
+                un = argparse.Namespace(game=g.appid, apply=False, force=False)
+                info("")
+                if run_quietly(cmd_uninstall, un) != 0 or not confirm("\nRemove the current install first?"):
+                    continue
+                un.apply = True
+                if run_quietly(cmd_uninstall, un) == 0:
+                    cache.pop("cands", None)
+                    install_flow(cache)
+                break
+            elif act == 3:
+                un = argparse.Namespace(game=g.appid, apply=False, force=False)
+                info("")
+                if run_quietly(cmd_uninstall, un) != 0 or not confirm("\nUninstall this now?"):
+                    continue
+                un.apply = True
+                run_quietly(cmd_uninstall, un)
+                cache.pop("cands", None)
+                break
+            ask("\nPress Enter to continue ")
+            m = load_manifest(g) or m
+
+
+def run_menu() -> int:
+    cache: dict = {}
+    try:
+        kit_ok = not kit_check(kit_dir())
+        while True:
+            inst = installed_games()
+            info("\n=== ostool: OptiScaler DLSS-NR + PeripheralWarp ===\n")
+            info("  1) Install Game")
+            info("  2) Modify Game")
+            info("  3) Exit")
+            info("\nCurrently installed")
+            if not inst:
+                info("  (none)")
+            for g, m in inst:
+                info(f"  - {g.name} [{g.source}]  {describe_install(m)}")
+            if not kit_ok:
+                info(f"\n  ! The kit at {kit_dir()} is missing or incomplete: installs will fail.\n"
+                     "    Build it once with: ostool kit init --from-game <working game exe folder>")
+            s = ask("\n> ")
+            if s == "1":
+                install_flow(cache)
+            elif s == "2":
+                modify_flow(cache)
+            elif s in ("3", "0", "q", "exit"):
+                return 0
+            else:
+                info("  please type 1, 2 or 3")
+    except Quit:
+        return 0
+
+
 # ----------------------------------------------------------------------------- main
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="ostool", description=__doc__.split("\n\n")[0])
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd")
     d = sub.add_parser("detect")
     d.add_argument("--all", action="store_true")
     k = sub.add_parser("kit")
@@ -1359,9 +1696,16 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--kernel", action="store_true")
     sub.add_parser("list")
     sub.add_parser("selftest")
+    sub.add_parser("menu")
     args = ap.parse_args(argv)
+    if args.cmd is None:
+        if not sys.stdin.isatty():
+            ap.print_help()
+            return 2
+        args.cmd = "menu"
     return {"detect": cmd_detect, "kit": cmd_kit, "install": cmd_install, "uninstall": cmd_uninstall,
-            "verify": cmd_verify, "list": cmd_list, "selftest": cmd_selftest}[args.cmd](args)
+            "verify": cmd_verify, "list": cmd_list, "selftest": cmd_selftest,
+            "menu": lambda _a: run_menu()}[args.cmd](args)
 
 
 if __name__ == "__main__":

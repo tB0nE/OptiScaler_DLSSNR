@@ -4,6 +4,15 @@ Puts the OptiScaler-DLSSNR + PeripheralWarp setup (and, where the game supports 
 DLSS frame-generation mod) into a Steam/Proton or Lutris/Wine game, and takes it back out again.
 Python 3, standard library only. **Nothing changes unless you pass `--apply`.**
 
+## Easiest way: the menu
+
+    ostool
+
+With no arguments it opens a menu: **Install Game** (suitable Steam games, then Lutris games, then pick a
+warp setting and frame gen, see the plan, confirm), **Modify Game** (verify, change warp settings, reinstall
+with different options, uninstall) and **Exit**, with a "Currently installed" list on the main screen.
+Everything below is the same engine as separate commands, for scripting.
+
 ## One-time: build the kit
 
 The kit is a local copy of a setup that already works, made from your working game folder. It is not
