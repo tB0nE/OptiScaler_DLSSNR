@@ -849,9 +849,12 @@ def print_plan(game: Game, a: dict, plan: dict, args) -> None:
         info("notes:   " + "; ".join(a["notes"]))
     if plan["conflicts"]:
         info("CONFLICTS (already present and different): " + ", ".join(plan["conflicts"][:8]))
-    for line in override_help(game, plan["overrides"]):
-        info(line)
-    info("   or: --edit-registry to write the override into the prefix's user.reg")
+    if getattr(args, "edit_registry", False):
+        info("overrides: will be written into the prefix's user.reg (backed up first)")
+    else:
+        for line in override_help(game, plan["overrides"]):
+            info(line)
+        info("   or: --edit-registry to write the override into the prefix's user.reg")
 
 
 def cmd_install(args) -> int:
