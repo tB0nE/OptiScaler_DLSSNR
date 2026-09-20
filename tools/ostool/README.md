@@ -1,8 +1,8 @@
 # ostool
 
 Puts the OptiScaler-DLSSNR + PeripheralWarp setup (and, where the game supports it, the separate
-DLSS frame-generation mod) into a Steam/Proton game, and takes it back out again. Python 3, standard
-library only. **Nothing changes unless you pass `--apply`.**
+DLSS frame-generation mod) into a Steam/Proton or Lutris/Wine game, and takes it back out again.
+Python 3, standard library only. **Nothing changes unless you pass `--apply`.**
 
 ## One-time: build the kit
 
@@ -16,13 +16,13 @@ Default location: `~/.local/share/ostool/kit` (override with `OSTOOL_KIT`).
 
 ## Per game
 
-    python3 ostool.py detect                    # which Steam games look suitable (--all shows why not)
+    python3 ostool.py detect                    # which games look suitable (--all shows why not)
     python3 ostool.py install "High On Life" --profile warp          # dry run: prints the plan
     python3 ostool.py install "High On Life" --profile warp --apply  # do it
     python3 ostool.py verify "High On Life" --kernel                 # after one run of the game
     python3 ostool.py uninstall "High On Life" --apply               # put everything back
 
-`GAME` is an appid, part of the name, or a folder path.
+`GAME` is a Steam appid, a Lutris id (`lutris:5`), part of the name or slug, or a folder path.
 
 * **Profiles** (`--profile`, comma separated to combine): `default` (warp off), `warp` (59/80),
   `warp-rt` (28/64), `bg3-dx11` (`Dx11Upscaler=dlss_12`, for Baldur's Gate 3's `bg3_dx11.exe`).
@@ -40,6 +40,24 @@ Default location: `~/.local/share/ostool/kit` (override with `OSTOOL_KIT`).
 * **Safety**: refuses to overwrite a `dxgi.dll` or `version.dll` it did not install (use `--force` to back up
   and replace), refuses non-DX12 games and detected anti-cheat, and flags known online-only games.
 
+## Lutris games
+
+`detect` also lists games managed by Lutris's Wine runner (read from
+`~/.local/share/lutris/pga.db` and `~/.config/lutris/games/*.yml`; Flatpak and `XDG_*_HOME`
+locations are honoured too). A Lutris id is `lutris:<id>`; you can also match by slug or name
+fragment. The configured `exe` and `prefix` come from the per-game YAML (`exe` may be wrapped over
+two lines and may be empty). The scan that falls back to finding the exe skips a prefix's
+`windows/`, `users/` and `dosdevices/`. 32-bit games, non-Wine runners, and Lutris entries that
+point at Steam are skipped.
+
+Because Lutris has no launch-options box, the tool prints manual steps instead:
+`Lutris > Configure > Runner options > DLL overrides` with `dxgi = n,b` (plus `version = n,b` for the
+frame-gen mod), and — for Proton-based runners — `System options > Environment variables` with
+`PROTON_NVIDIA_NVCUDA = 1`. `--edit-registry` writes the overrides into the prefix's `user.reg`
+instead and needs no manual step. Lutris usually installs DXVK's own `dxgi.dll` into the prefix;
+OptiScaler's `dxgi.dll` in the game folder loads first and chains to it, and `detect`/`install` log
+whether that prefix `dxgi.dll` is present.
+
 ## What it records
 
 `<game>/_mod_backups/ostool/manifest.json` lists every file added or replaced, with sha256 hashes, the
@@ -51,10 +69,11 @@ registry byte-for-byte (or removes only its own lines if the file changed since)
 
     python3 ostool.py selftest
 
-Builds a throwaway fake Steam game and checks discovery, dry run, conflict refusal, install, verify,
-uninstall (byte-identical folder and registry afterwards) and the surgical registry undo.
+Builds a throwaway fake Steam game and a throwaway fake Lutris library (SQLite + YAML) and checks
+discovery, dry run, conflict refusal, install, verify, uninstall (byte-identical folder and registry
+afterwards) and the surgical registry undo.
 
 ## Not done yet
 
-Upgrading an existing install in place (uninstall first), 32-bit games, non-Steam games, and the
+Upgrading an existing install in place (uninstall first), 32-bit games, and the
 `External = true` frame-generation setting, which is its own experiment.

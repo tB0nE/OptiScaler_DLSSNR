@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""ostool - put the OptiScaler-DLSSNR + frame-generation setup into Steam/Proton games, reversibly.
+"""ostool - put the OptiScaler-DLSSNR + frame-generation setup into Steam/Proton and Lutris/Wine games, reversibly.
 
 Nothing is changed without --apply. Every change is recorded in a manifest (with sha256 hashes) so
 `uninstall` puts a game back exactly as it was. Standard library only.
 
-  ostool detect                      list Steam games and how suitable they look
+  ostool detect                      list games and how suitable they look
   ostool kit init --from-game DIR    build the local kit from a game where the setup already works
   ostool install GAME [--apply]      plan (or perform) an install; GAME = appid, name fragment or path
   ostool verify GAME [--kernel]      check hashes and read the game's logs
@@ -21,6 +21,7 @@ import mmap
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -183,9 +184,13 @@ class Game:
     path: Path
     prefix: Path | None
     library: Path
+    source: str = "steam"          # "steam" | "lutris"
+    slug: str = ""
+    exe_hint: Path | None = None   # Lutris: the configured exe, if any
+    proton: bool = False           # Lutris: runner is Proton-based (NVIDIA env var advice)
 
 
-def games() -> list[Game]:
+def steam_games() -> list[Game]:
     out: list[Game] = []
     for lib in libraries():
         sa = lib / "steamapps"
@@ -207,15 +212,152 @@ def games() -> list[Game]:
     return out
 
 
+# ----------------------------------------------------------------------------- Lutris discovery
+def lutris_data_dir() -> Path:
+    env = os.environ.get("OSTOOL_LUTRIS_DATA")
+    if env:
+        return Path(env)
+    xdg = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".local/share"
+    for c in (base / "lutris", Path.home() / ".var/app/net.lutris.Lutris/data/lutris"):
+        if (c / "pga.db").exists():
+            return c
+    return base / "lutris"
+
+
+def lutris_config_dir() -> Path:
+    env = os.environ.get("OSTOOL_LUTRIS_CONFIG")
+    if env:
+        return Path(env)
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    for c in (base / "lutris", Path.home() / ".var/app/net.lutris.Lutris/config/lutris"):
+        if (c / "games").is_dir():
+            return c
+    return base / "lutris"
+
+
+def lutris_yaml_game(text: str) -> dict:
+    """First-level scalar keys of the top-level `game:` block only; ignores script/installer.
+
+    Handles quoted values and folded multi-line plain scalars (Lutris wraps long `exe` paths)."""
+    lines = text.split("\n")
+    start = next((i for i, l in enumerate(lines) if re.match(r"^game:\s*$", l)), None)
+    if start is None:
+        return {}
+    out, cur, base = {}, None, None
+    for line in lines[start + 1:]:
+        if not line.strip():
+            continue
+        if line[0] not in " \t":            # a top-level key: the `game:` block is over
+            break
+        stripped = line.lstrip(" \t")
+        indent = len(line) - len(stripped)
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*):(?:\s+(.*))?$", stripped)
+        if m and (base is None or indent <= base):
+            if base is None:
+                base = indent
+            cur = m.group(1)
+            val = (m.group(2) or "").strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in "'\"":
+                val = val[1:-1]
+            out[cur] = val
+        elif cur is not None:
+            out[cur] += " " + stripped       # folded continuation of a plain scalar
+    return out
+
+
+def expand_lutris_path(raw: str, directory: Path | None) -> Path | None:
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    p = Path(os.path.expandvars(os.path.expanduser(raw)))
+    if not p.is_absolute() and directory is not None:
+        p = Path(directory) / p
+    return p
+
+
+def lutris_prefix_root(prefix: Path | None) -> Path | None:
+    """The directory that holds user.reg, or None if it can't be found."""
+    if prefix is None:
+        return None
+    for cand in (prefix / "user.reg", prefix / "pfx" / "user.reg"):
+        if cand.exists():
+            return cand.parent
+    default = Path.home() / ".wine"
+    if (default / "user.reg").exists():
+        return default
+    return None
+
+
+def is_under(path: Path | None, base: Path | None) -> bool:
+    if path is None or base is None:
+        return False
+    try:
+        path.relative_to(base)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def lutris_games() -> list[Game]:
+    out: list[Game] = []
+    db = lutris_data_dir() / "pga.db"
+    if not db.exists():
+        return out
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        con.row_factory = sqlite3.Row
+        rows = con.execute("SELECT * FROM games").fetchall()
+        con.close()
+    except sqlite3.Error:
+        return out
+    cfgdir = lutris_config_dir()
+    for row in rows:
+        d = {k: row[k] for k in row.keys()}       # read by name: columns vary between versions
+        if d.get("runner") != "wine" or not d.get("installed"):
+            continue
+        game_id = d.get("id")
+        name = d.get("name") or f"Lutris {game_id}"
+        directory = Path(d["directory"]) if d.get("directory") else None
+        configpath = d.get("configpath")
+        try:
+            text = (cfgdir / "games" / f"{configpath}.yml").read_text(errors="replace") if configpath else ""
+        except OSError:
+            text = ""  # stale row whose config is gone: still listed, exe found by scanning
+        cfg = lutris_yaml_game(text)
+        exe_hint = expand_lutris_path(cfg.get("exe"), directory)
+        prefix = lutris_prefix_root(expand_lutris_path(cfg.get("prefix"), directory))
+        exe = pick_exe(directory, exe_hint)
+        root = directory if is_under(exe, directory) else (exe.parent if exe is not None else directory)
+        if root is None:
+            continue
+        out.append(Game(f"lutris:{game_id}", name, root, prefix,
+                        prefix or root, "lutris", str(d.get("slug") or ""), exe_hint,
+                        "proton" in text.lower()))
+    return out
+
+
+def games() -> list[Game]:
+    out = steam_games()
+    try:
+        out += lutris_games()
+    except Exception as e:  # never let a Lutris problem break Steam games
+        print(f"warning: could not read the Lutris library ({type(e).__name__}: {e}); Steam games only",
+              file=sys.stderr)
+    return out
+
+
 def resolve_game(sel: str) -> Game:
     p = Path(sel)
     if p.is_dir():
         return Game("?", p.name, p, None, p.parent)
     allg = games()
     hits = [g for g in allg if g.appid == sel] or \
+           [g for g in allg if g.slug and sel.lower() in g.slug.lower()] or \
            [g for g in allg if sel.lower() in g.name.lower()]
     if not hits:
-        die(f"no Steam game matches '{sel}' (try `ostool detect`)")
+        die(f"no game matches '{sel}' (try `ostool detect`)")
     if len(hits) > 1:
         names = ", ".join(f"{g.name} ({g.appid})" for g in hits[:6])
         die(f"'{sel}' matches several games: {names}")
@@ -224,7 +366,9 @@ def resolve_game(sel: str) -> Game:
 
 # ----------------------------------------------------------------------------- exe analysis
 SKIP_DIRS = {"redist", "redistributables", "_commonredist", "__installer", "directx", "vcredist",
-             "crashreportclient", "easyanticheat", "battleye", "eos", "dotnet", "__pycache__", "_mod_backups"}
+             "crashreportclient", "easyanticheat", "battleye", "eos", "dotnet", "__pycache__", "_mod_backups",
+             # Wine-prefix internals (a Lutris game root is very often the prefix itself):
+             "windows", "users", "dosdevices"}
 SKIP_EXE = re.compile(r"(unins|crash|report|launcher|redist|dxsetup|setup|helper|updater|installer|"
                       r"easyanticheat|battleye|dotnet|webview|cef|benchmark)", re.I)
 
@@ -264,15 +408,23 @@ def find_exes(root: Path, depth: int = 5) -> list[Path]:
     return [p for _, p in found]
 
 
-def main_exe(game: Game) -> Path | None:
-    cands = [p for p in find_exes(game.path)[:12] if pe_machine(p) == 0x8664]
+def pick_exe(path: Path | None, exe_hint: Path | None = None) -> Path | None:
+    if exe_hint is not None and exe_hint.is_file() and pe_machine(exe_hint) == 0x8664:
+        return exe_hint
+    if path is None or not path.is_dir():
+        return None
+    cands = [p for p in find_exes(path)[:12] if pe_machine(p) == 0x8664]
     if not cands:
         return None
 
     def dx12(p: Path) -> bool:
-        return "dx12" in str(p.relative_to(game.path)).lower() or (p.parent / "D3D12").is_dir()
+        return "dx12" in str(p.relative_to(path)).lower() or (p.parent / "D3D12").is_dir()
 
     return ([p for p in cands if dx12(p)] or cands)[0]
+
+
+def main_exe(game: Game) -> Path | None:
+    return pick_exe(game.path, game.exe_hint)
 
 
 def scan_exe(path: Path) -> dict:
@@ -322,6 +474,11 @@ def assess(game: Game, exe_override: Path | None = None) -> dict:
         a["notes"].append("anti-cheat present: " + ", ".join(a["anticheat"]))
     if game.appid in KNOWN_ONLINE:
         a["notes"].append(KNOWN_ONLINE[game.appid])
+    if game.source == "lutris" and game.prefix is not None:
+        dxvk = [p for p in (game.prefix / "drive_c/windows/system32/dxgi.dll",
+                            game.prefix / "drive_c/windows/syswow64/dxgi.dll") if p.exists()]
+        a["notes"].append("prefix dxgi.dll (DXVK): " + (", ".join(str(p.relative_to(game.prefix))
+                          for p in dxvk) if dxvk else "none (OptiScaler's dxgi.dll will be the only one)"))
     a["ok"] = dx12 and bool(a["dlss_files"] or s["nvngx"] or a["streamline"]) and not a["anticheat"] \
         and game.appid not in KNOWN_ONLINE
     return a
@@ -330,9 +487,9 @@ def assess(game: Game, exe_override: Path | None = None) -> dict:
 def cmd_detect(args) -> int:
     gl = games()
     if not gl:
-        info("no Steam games found")
+        info("no games found")
         return 1
-    info(f"{'APPID':>8}  {'FIT':<4} {'DLSS-G':<6} GAME  (exe dir)")
+    info(f"{'ID':>8}  {'FIT':<4} {'DLSS-G':<6} GAME  (exe dir)")
     for g in gl:
         a = assess(g)
         if a["exe"] is None and not args.all:
@@ -469,7 +626,11 @@ def proc_scan(pred) -> list[int]:
 def wineserver_using(prefix: Path) -> bool:
     if os.environ.get("OSTOOL_NO_PROCCHECK"):
         return False
-    target = str(prefix.parent)
+
+    def winenv(p: str) -> str:
+        return p.rstrip("/") or "/"
+
+    want = winenv(str(prefix))
 
     def pred(d: Path) -> bool:
         if (d / "comm").read_text().strip() != "wineserver":
@@ -478,8 +639,15 @@ def wineserver_using(prefix: Path) -> bool:
             env = (d / "environ").read_bytes().decode(errors="replace")
         except OSError:
             return True  # cannot tell: be conservative
-        return any(target in kv or str(prefix) in kv for kv in env.split("\0")
-                   if kv.startswith(("WINEPREFIX=", "STEAM_COMPAT_DATA_PATH=")))
+        for kv in env.split("\0"):
+            # match WINEPREFIX exactly (a prefix under another prefix must not match)
+            if kv.startswith("WINEPREFIX=") and winenv(kv[len("WINEPREFIX="):]) == want:
+                return True
+            # Proton names its prefix <compatdata>/<appid>/pfx; STEAM_COMPAT_DATA_PATH is the dir above it
+            if kv.startswith("STEAM_COMPAT_DATA_PATH=") and \
+                    winenv(kv[len("STEAM_COMPAT_DATA_PATH="):]) == winenv(str(prefix.parent)):
+                return True
+        return False
 
     return bool(proc_scan(pred))
 
@@ -635,12 +803,26 @@ def build_plan(game: Game, a: dict, args) -> dict:
             "overrides": overrides, "profile": args.profile}
 
 
+def override_help(game: Game, overrides: list[str]) -> list[str]:
+    """How to set the DLL overrides by hand when --edit-registry is not used."""
+    if game.source != "lutris":
+        ovr = ";".join(f"{n}=n,b" for n in overrides)
+        return [f'set the Steam launch options to:  WINEDLLOVERRIDES="{ovr}" PROTON_NVIDIA_NVCUDA=1 %command%']
+    lines = ["Lutris > Configure > Runner options > DLL overrides: add"]
+    for n in overrides:
+        lines.append(f'  "{n}" = "n,b"' + ("   (the frame-gen mod)" if n == "version" else ""))
+    if game.proton:
+        lines.append("if the runner is Proton-based, also System options > Environment variables:")
+        lines.append("  PROTON_NVIDIA_NVCUDA = 1")
+    return lines
+
+
 def print_plan(game: Game, a: dict, plan: dict, args) -> None:
     exe = a["exe"]
     info(f"game:    {game.name} ({game.appid})")
     info(f"exe:     {exe.relative_to(game.path)}   (64-bit; dx12={a['dx12']}, "
          f"DLSS files={a['dlss_files'] or 'none'}, DLSS-G={'yes' if a['has_dlss_g'] else 'no'})")
-    info(f"prefix:  {game.prefix or 'not found (game never launched with Proton?)'}")
+    info(f"prefix:  {game.prefix or 'not found (game never launched?)'}")
     info(f"profile: {plan['profile']}   frame gen: {plan['fg']}")
     n = {"added": 0, "replaced": 0, "identical": 0}
     for f in plan["files"]:
@@ -655,9 +837,9 @@ def print_plan(game: Game, a: dict, plan: dict, args) -> None:
         info("notes:   " + "; ".join(a["notes"]))
     if plan["conflicts"]:
         info("CONFLICTS (already present and different): " + ", ".join(plan["conflicts"][:8]))
-    ovr = ";".join(f"{n}=n,b" for n in plan["overrides"])
-    info(f'launch options:  WINEDLLOVERRIDES="{ovr}" PROTON_NVIDIA_NVCUDA=1 %command%')
-    info(f"   or: --edit-registry to write the override into the prefix's user.reg")
+    for line in override_help(game, plan["overrides"]):
+        info(line)
+    info("   or: --edit-registry to write the override into the prefix's user.reg")
 
 
 def cmd_install(args) -> int:
@@ -693,7 +875,7 @@ def cmd_install(args) -> int:
         hard.append("some files already exist and differ (use --force to back them up and replace)")
     if args.edit_registry:
         if game.prefix is None:
-            hard.append("no Proton prefix found for this game")
+            hard.append("no Wine prefix found for this game (set it manually in Lutris as shown above)")
         elif wineserver_using(game.prefix):
             hard.append("a wineserver is running for this prefix; close the game/Steam and retry")
         elif game_running(a["exe"].name):
@@ -761,11 +943,11 @@ def do_install(game: Game, a: dict, plan: dict, args) -> int:
     manifest_path(game).write_text(json.dumps(manifest, indent=2))
     info(f"\ninstalled {len([f for f in plan['files'] if f['action'] != 'identical'])} files. "
          f"Manifest: {manifest_path(game)}")
-    ovr = ";".join(f"{n}=n,b" for n in plan["overrides"])
     if reg_rec:
         info("registry override written; no launch options needed")
     else:
-        info(f'set the Steam launch options to:  WINEDLLOVERRIDES="{ovr}" PROTON_NVIDIA_NVCUDA=1 %command%')
+        for line in override_help(game, plan["overrides"]):
+            info(line)
     info("then run the game once and `ostool verify` it.")
     return 0
 
@@ -976,8 +1158,13 @@ def cmd_selftest(args) -> int:
         (kit / INI_TEMPLATE).write_text("[FrameGen]\r\nExternal = auto\r\n\r\n[ProcessFilter]\r\n"
                                         "TargetProcessName = Cyberpunk2077.exe\r\n\r\n[Upscalers]\r\n"
                                         "Dx11Upscaler = auto\r\n\r\n[DlssNr]\r\nPeripheralWarpEnabled = auto\r\n")
+        lutris_data = tmp / "lutris-data"
+        lutris_cfg = tmp / "lutris-config"
+        lutris_data.mkdir()
+        lutris_cfg.mkdir()
         os.environ.update({"OSTOOL_STEAM_ROOTS": str(steam), "OSTOOL_KIT": str(kit),
-                           "OSTOOL_NO_PROCCHECK": "1"})
+                           "OSTOOL_NO_PROCCHECK": "1",
+                           "OSTOOL_LUTRIS_DATA": str(lutris_data), "OSTOOL_LUTRIS_CONFIG": str(lutris_cfg)})
         before = tree_hash(game)
         reg_before = (prefix / "user.reg").read_bytes()
 
@@ -1028,6 +1215,111 @@ def cmd_selftest(args) -> int:
         main(["uninstall", "999", "--apply"])
         after = (prefix / "user.reg").read_text()
         check("Later" in after and "AppDefaults" not in after, "surgical registry undo keeps later edits")
+
+        # --- Lutris fixture ---
+        lgames = tmp / "lutris-games"
+        (lutris_cfg / "games").mkdir(parents=True)
+        lcon = sqlite3.connect(str(lutris_data / "pga.db"))
+        lcon.execute("CREATE TABLE games (id INTEGER, name TEXT, slug TEXT, runner TEXT, "
+                     "installed INTEGER, directory TEXT, configpath TEXT)")
+
+        def add_lrow(gid, name, slug, runner, installed, directory, configpath):
+            lcon.execute("INSERT INTO games VALUES (?,?,?,?,?,?,?)",
+                         (gid, name, slug, runner, installed, directory, configpath))
+
+        # A: the real round-trip game (exe lives inside its prefix's drive_c; multi-line exe path)
+        game_a = lgames / "fake-lutris"
+        exe_dir_a = game_a / "drive_c/Program Files (x86)/Fake Game"
+        exe_dir_a.mkdir(parents=True)
+        exe_a = exe_dir_a / "FakeGame.exe"
+        exe_a.write_bytes(bytes(pe) + b"d3d12.dll nvngx " * 4 + b"\0" * 5000)
+        for n in ("nvngx_dlss.dll", "sl.dlss_g.dll", "sl.interposer.dll"):
+            (exe_dir_a / n).write_bytes(b"x")
+        (game_a / "drive_c/windows/system32").mkdir(parents=True)
+        (game_a / "drive_c/windows/system32/dxgi.dll").write_bytes(b"dxvk")
+        reg_a = game_a / "user.reg"
+        reg_a.write_text('WINE REGISTRY Version 2\n\n[Software\\\\Wine\\\\Other] 1\n"a"="b"\n')
+        exe_str = str(exe_a)
+        head, tail = exe_str.rsplit(" ", 1)
+        (lutris_cfg / "games/fake-lutris-setup-100.yml").write_text(
+            f"game:\n  exe: {head}\n    {tail}\n  prefix: {game_a}\n"
+            f"game_slug: fake-lutris\nname: Fake Lutris Game\n"
+            f"script:\n  game:\n    exe: _xXx_AUTO_WIN32_xXx_\n    prefix: $GAMEDIR\n"
+            f"  installer:\n  - task:\n      arch: win64\n      executable: /nonexistent/Setup.exe\n"
+            f"      prefix: $GAMEDIR\nsystem:\n  env:\n    LC_ALL: ''\n")
+        add_lrow(100, "Fake Lutris Game", "fake-lutris", "wine", 1, str(game_a), "fake-lutris-setup-100")
+
+        # B: empty exe; the scan must skip the prefix's windows/users/dosdevices
+        game_b = lgames / "fake-empty"
+        for sub in ("drive_c/windows/system32", "drive_c/users/Public", "dosdevices", "drive_c/Game"):
+            (game_b / sub).mkdir(parents=True)
+        (game_b / "drive_c/windows/system32/evil.exe").write_bytes(bytes(pe) + b"\0" * 90000)
+        (game_b / "drive_c/users/Public/evil2.exe").write_bytes(bytes(pe) + b"\0" * 90000)
+        (game_b / "dosdevices/evil3.exe").write_bytes(bytes(pe) + b"\0" * 90000)
+        (game_b / "drive_c/Game/RealGame.exe").write_bytes(bytes(pe) + b"d3d12.dll nvngx " * 4 + b"\0" * 2000)
+        (game_b / "user.reg").write_text("WINE REGISTRY Version 2\n")
+        (lutris_cfg / "games/fake-empty-101.yml").write_text(
+            f"game:\n  exe: ''\n  prefix: {game_b}\nscript:\n  game:\n    exe: _xXx_AUTO_WIN32_xXx_\n")
+        add_lrow(101, "Fake Empty Exe", "fake-empty", "wine", 1, str(game_b), "fake-empty-101")
+
+        # C/D: rows that must be skipped (steam runner, not installed)
+        add_lrow(102, "Fake Steam Row", "fake-steam", "steam", 1, str(lgames), "x")
+        add_lrow(103, "Fake Not Installed", "fake-ni", "wine", 0, str(lgames), "x")
+
+        # E: Proton-style prefix with a pfx/ subfolder
+        game_e = lgames / "fake-pfx"
+        exe_dir_e = game_e / "drive_c/PfxGame"
+        exe_dir_e.mkdir(parents=True)
+        exe_e = exe_dir_e / "PfxGame.exe"
+        exe_e.write_bytes(bytes(pe) + b"d3d12.dll nvngx " * 4 + b"\0" * 5000)
+        (game_e / "pfx").mkdir(parents=True)
+        (game_e / "pfx/user.reg").write_text("WINE REGISTRY Version 2\n")
+        (lutris_cfg / "games/fake-pfx-104.yml").write_text(
+            f"game:\n  exe: {exe_e}\n  prefix: {game_e}\n"
+            f"script:\n  game:\n    exe: _xXx_AUTO_WIN32_xXx_\n    prefix: $GAMEDIR\n")
+        add_lrow(104, "Fake PFX Game", "fake-pfx", "wine", 1, str(game_e), "fake-pfx-104")
+        lcon.commit()
+        lcon.close()
+
+        lg = {g.appid: g for g in lutris_games()}
+        check(set(lg) == {"lutris:100", "lutris:101", "lutris:104"},
+              "lutris: discovers wine+installed rows, skips steam/uninstalled rows")
+        check(lg["lutris:100"].exe_hint == exe_a, "lutris: exe from the folded multi-line config path")
+        check(lg["lutris:100"].prefix == game_a, "lutris: prefix is the user.reg folder")
+        check(lg["lutris:100"].path == game_a, "lutris: game root stays the prefix when it holds the exe")
+        check(lg["lutris:101"].exe_hint is None and lg["lutris:101"].path == game_b,
+              "lutris: empty exe falls back to the scan")
+        check(pick_exe(game_b, None) == game_b / "drive_c/Game/RealGame.exe",
+              "lutris: scan skips windows/users/dosdevices internals")
+        check(lg["lutris:104"].prefix == game_e / "pfx", "lutris: Proton-style prefix resolved to pfx/user.reg")
+        check(lg["lutris:104"].exe_hint == exe_e, "lutris: exe from a single-line config path")
+
+        aa = assess(lg["lutris:100"])
+        check(aa["ok"] and aa["has_dlss_g"], "lutris: recognises DX12 + DLSS + DLSS-G")
+        check(any("prefix dxgi.dll (DXVK)" in n for n in aa["notes"]),
+              "lutris: notes the prefix's DXVK dxgi.dll")
+
+        # regression: a library row whose config file is gone must not break discovery
+        lcon = sqlite3.connect(str(lutris_data / "pga.db"))
+        lcon.execute("INSERT INTO games VALUES (105, 'Fake Stale Row', 'fake-stale', 'wine', 1, ?, 'gone-105')",
+                     (str(game_e),))
+        lcon.commit()
+        lcon.close()
+        lg2 = {g.appid: g for g in games()}
+        check("lutris:105" in lg2 and "lutris:100" in lg2 and any(k == "999" for k in lg2),
+              "lutris: a stale row (missing config file) does not break discovery")
+
+        before_a = tree_hash(game_a)
+        reg_a_before = reg_a.read_bytes()
+        rc = main(["install", "lutris:100", "--apply", "--edit-registry"])
+        check(rc == 0, "lutris: install --apply succeeds")
+        check((exe_dir_a / "dxgi.dll").read_bytes() == b"OptiScaler-dll", "lutris: proxy dll installed")
+        check("AppDefaults\\\\FakeGame.exe" in reg_a.read_text(), "lutris: registry override written")
+        check(main(["verify", "lutris:100"]) == 0, "lutris: verify passes")
+        rc = main(["uninstall", "lutris:100", "--apply"])
+        check(rc == 0, "lutris: uninstall --apply succeeds")
+        check(tree_hash(game_a) == before_a, "lutris: game folder byte-identical after uninstall")
+        check(reg_a.read_bytes() == reg_a_before, "lutris: registry restored byte-for-byte")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("SELFTEST " + ("PASSED" if ok else "FAILED"))

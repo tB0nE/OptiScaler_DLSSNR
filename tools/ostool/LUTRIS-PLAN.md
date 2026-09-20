@@ -1,8 +1,9 @@
 # Plan: Lutris support for ostool
 
-**Status: not started.** Paused until the Lutris library holds only games the user owns (GOG, Epic,
-Battle.net, itch, etc.). No Lutris code exists yet. Everything below was worked out from reading the
-Lutris file layout on the development machine (read-only) and from the current ostool design.
+**Status: implemented and self-tested.** Discovery, install/uninstall parity, the wineserver check fix,
+manual-instructions output and the README section are done (`tools/ostool/ostool.py`). The real-game
+test (milestone 5) and the precondition that the Lutris library hold only owned games (milestone 1) are
+still pending on the user's machine.
 
 ## Goal
 
@@ -69,10 +70,10 @@ Linux, ...), Lutris "steam" entries (Steam discovery already covers those), 32-b
 
 ## Milestones
 
-1. Preconditions: library cleaned; one owned test game chosen and installed in Lutris.
-2. Discovery + `detect` (read-only), fixture test.
-3. Install/uninstall parity with Steam, fixture round trip.
-4. Wineserver check fix; manual-instructions output; README section.
+1. ~~Preconditions: library cleaned; one owned test game chosen and installed in Lutris.~~ (user's machine)
+2. ~~Discovery + `detect` (read-only), fixture test.~~
+3. ~~Install/uninstall parity with Steam, fixture round trip.~~
+4. ~~Wineserver check fix; manual-instructions output; README section.~~
 5. Real-game test, then note results and any prefix quirks found.
 
 ## Risks
