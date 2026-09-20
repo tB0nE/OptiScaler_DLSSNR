@@ -487,8 +487,10 @@ def wineserver_using(prefix: Path) -> bool:
 def game_running(exe_name: str) -> bool:
     if os.environ.get("OSTOOL_NO_PROCCHECK"):
         return False
-    low = exe_name.lower()
-    return bool(proc_scan(lambda d: low in (d / "cmdline").read_bytes().decode(errors="replace").lower()))
+    # Wine names a process after its exe (the kernel keeps 15 characters): match that exactly, not any
+    # command line that merely mentions the name (a shell, an editor, this very tool).
+    want = exe_name.lower()[:15]
+    return bool(proc_scan(lambda d: (d / "comm").read_text().strip().lower() == want))
 
 
 # ----------------------------------------------------------------------------- kit
