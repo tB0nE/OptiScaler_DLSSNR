@@ -56,6 +56,9 @@ PROFILES = {
                            "TemporalBackground": "false"}},
 }
 
+# Extra profile for Baldur's Gate 3's DX11 executable (bg3_dx11.exe); bg3.exe uses Dx12Upscaler=dlss (already default).
+PROFILES["bg3-dx11"] = {"Upscalers": {"Dx11Upscaler": "dlss_12"}}
+
 STREAMLINE_FILES = ["sl.interposer.dll", "sl.dlss_g.dll", "sl.dlss.dll", "sl.common.dll"]
 DLSS_FILES = ["nvngx_dlss.dll", "nvngx_dlssd.dll", "nvngx_dlssg.dll"]
 PROXY_NAMES = ["dxgi.dll", "version.dll", "winmm.dll", "dbghelp.dll", "d3d12.dll", "dinput8.dll"]
@@ -262,10 +265,14 @@ def find_exes(root: Path, depth: int = 5) -> list[Path]:
 
 
 def main_exe(game: Game) -> Path | None:
-    for p in find_exes(game.path)[:8]:
-        if pe_machine(p) == 0x8664:
-            return p
-    return None
+    cands = [p for p in find_exes(game.path)[:12] if pe_machine(p) == 0x8664]
+    if not cands:
+        return None
+
+    def dx12(p: Path) -> bool:
+        return "dx12" in str(p.relative_to(game.path)).lower() or (p.parent / "D3D12").is_dir()
+
+    return ([p for p in cands if dx12(p)] or cands)[0]
 
 
 def scan_exe(path: Path) -> dict:
@@ -287,8 +294,8 @@ def scan_exe(path: Path) -> dict:
     return res
 
 
-def assess(game: Game) -> dict:
-    exe = main_exe(game)
+def assess(game: Game, exe_override: Path | None = None) -> dict:
+    exe = exe_override or main_exe(game)
     a: dict = {"exe": exe, "notes": [], "ok": False}
     if exe is None:
         a["notes"].append("no 64-bit exe found")
@@ -365,8 +372,20 @@ def set_ini(text: str, section: str, key: str, value: str) -> str:
     return nl.join(lines)
 
 
+def merge_profiles(names: str) -> dict:
+    merged: dict = {}
+    for name in [n.strip() for n in names.split(",") if n.strip()]:
+        prof = PROFILES.get(name)
+        if prof is None:
+            die(f"unknown profile '{name}' (have: {', '.join(PROFILES)})")
+        for sec, kv in prof.items():
+            merged.setdefault(sec, {}).update(kv)
+    return merged
+
+
 def render_ini(template: str, profile: dict, sets: list[str]) -> str:
-    text = template
+    # An ini that names one game's exe puts OptiScaler in pass-through mode in another: always auto.
+    text = set_ini(template, "ProcessFilter", "TargetProcessName", "auto")
     for section, kv in profile.items():
         for k, v in kv.items():
             text = set_ini(text, section, k, v)
@@ -562,9 +581,7 @@ def build_plan(game: Game, a: dict, args) -> dict:
     if miss:
         die(f"kit at {kit} is incomplete (missing {', '.join(miss)}); run `ostool kit init --from-game DIR`")
     exe_dir: Path = a["exe_dir"]
-    profile = PROFILES.get(args.profile)
-    if profile is None:
-        die(f"unknown profile '{args.profile}' (have: {', '.join(PROFILES)})")
+    profile = merge_profiles(args.profile)
 
     fg = args.fg
     if fg == "auto":
@@ -643,9 +660,19 @@ def print_plan(game: Game, a: dict, plan: dict, args) -> None:
 
 def cmd_install(args) -> int:
     game = resolve_game(args.game)
-    a = assess(game)
+    if args.prefix:
+        game.prefix = Path(args.prefix).expanduser()
+        if not (game.prefix / "user.reg").exists():
+            die(f"{game.prefix} is not a Wine prefix (no user.reg)")
+    override = None
+    if args.exe:
+        override = Path(args.exe)
+        override = override if override.is_absolute() else game.path / override
+        if not override.is_file() or pe_machine(override) != 0x8664:
+            die(f"{override} is not a 64-bit exe")
+    a = assess(game, override)
     if a["exe"] is None:
-        die("no 64-bit exe found in that game")
+        die("no 64-bit exe found in that game (use --exe)")
     if load_manifest(game):
         die("already installed here; run `ostool uninstall` first (upgrades are not supported yet)")
     plan = build_plan(game, a, args)
@@ -916,14 +943,16 @@ def cmd_selftest(args) -> int:
             f'"libraryfolders"\n{{\n\t"0"\n\t{{\n\t\t"path"\t\t"{lib}"\n\t}}\n}}\n')
         sa = lib / "steamapps"
         game = sa / "common/FakeGame"
-        exe_dir = game / "bin/x64"
+        exe_dir = game / "bin/x64_DX12"
         exe_dir.mkdir(parents=True)
+        (game / "bin/x64").mkdir(parents=True)
         (sa / "appmanifest_999.acf").write_text(
             '"AppState"\n{\n\t"appid"\t\t"999"\n\t"name"\t\t"Fake Game"\n\t"installdir"\t\t"FakeGame"\n}\n')
         pe = bytearray(b"MZ" + b"\0" * 0x3E)
         pe[0x3C:0x40] = (0x80).to_bytes(4, "little")
         pe += b"\0" * (0x80 - len(pe)) + b"PE\0\0" + (0x8664).to_bytes(2, "little") + b"\0" * 200
         (exe_dir / "Fake-Win64-Shipping.exe").write_bytes(bytes(pe) + b"d3d12.dll nvngx " * 4 + b"\0" * 5000)
+        (game / "bin/x64/Fake-Big.exe").write_bytes(bytes(pe) + b"\0" * 90000)  # bigger, but DX11
         for n in ("nvngx_dlss.dll", "sl.dlss_g.dll", "sl.interposer.dll"):
             (exe_dir / n).write_bytes(b"x")
         (exe_dir / "game.cfg").write_text("keep me")
@@ -942,7 +971,9 @@ def cmd_selftest(args) -> int:
         (kit / "mod/dlssg_sm86.ini").write_text("[General]\nEnabled=1\n")
         for s in WARP_SHADERS:
             (kit / f"peripheral_warp/{s}").write_bytes(b"dxbc")
-        (kit / INI_TEMPLATE).write_text("[FrameGen]\r\nExternal = auto\r\n\r\n[DlssNr]\r\nPeripheralWarpEnabled = auto\r\n")
+        (kit / INI_TEMPLATE).write_text("[FrameGen]\r\nExternal = auto\r\n\r\n[ProcessFilter]\r\n"
+                                        "TargetProcessName = Cyberpunk2077.exe\r\n\r\n[Upscalers]\r\n"
+                                        "Dx11Upscaler = auto\r\n\r\n[DlssNr]\r\nPeripheralWarpEnabled = auto\r\n")
         os.environ.update({"OSTOOL_STEAM_ROOTS": str(steam), "OSTOOL_KIT": str(kit),
                            "OSTOOL_NO_PROCCHECK": "1"})
         before = tree_hash(game)
@@ -951,6 +982,11 @@ def cmd_selftest(args) -> int:
         check(any(g.appid == "999" for g in games()), "discovers the fake Steam game")
         a = assess(games()[0])
         check(a["ok"] and a["has_dlss_g"], "recognises it as DX12 + DLSS + DLSS-G")
+        check(a["exe"].parent == exe_dir, "prefers the DX12 exe over a bigger one")
+        rc = main(["install", "999", "--exe", "bin/x64/Fake-Big.exe"])
+        check(rc == 3, "--exe pointing at a non-DX12 exe is refused")
+        rc = main(["install", "999", "--exe", "bin/x64/Fake-Big.exe", "--force"])
+        check(rc == 0, "--exe with --force is accepted (dry run)")
 
         rc = main(["install", "999", "--profile", "warp"])
         check(rc == 0 and tree_hash(game) == before, "dry run changes nothing")
@@ -961,13 +997,16 @@ def cmd_selftest(args) -> int:
         (exe_dir / "dxgi.dll").unlink()
         before = tree_hash(game)
 
-        rc = main(["install", "999", "--apply", "--edit-registry", "--profile", "warp",
+        rc = main(["install", "999", "--apply", "--edit-registry", "--profile", "warp,bg3-dx11",
                    "--set", "FrameGen.External=true"])
         check(rc == 0, "install --apply succeeds")
         check((exe_dir / "dxgi.dll").read_bytes() == b"OptiScaler-dll", "proxy dll installed as dxgi.dll")
         ini = (exe_dir / "OptiScaler.ini").read_bytes().decode()
         check("PeripheralWarpEnabled = true" in ini and "External = true" in ini and "\r\n" in ini,
               "ini rendered with profile + --set and CRLF kept")
+        check("TargetProcessName = auto" in ini and "Cyberpunk2077" not in ini,
+              "another game's exe name is stripped from the ini")
+        check("Dx11Upscaler = dlss_12" in ini, "profiles can be combined (warp + bg3-dx11)")
         reg = (prefix / "user.reg").read_text()
         check('"dxgi"="native,builtin"' in reg and '"version"="native,builtin"' in reg
               and "AppDefaults\\\\Fake-Win64-Shipping.exe" in reg, "registry override written")
@@ -1008,7 +1047,10 @@ def main(argv: list[str] | None = None) -> int:
     ksub.add_parser("show")
     i = sub.add_parser("install")
     i.add_argument("game")
-    i.add_argument("--profile", default="default", help=f"one of: {', '.join(PROFILES)}")
+    i.add_argument("--profile", default="default",
+                   help=f"one or more, comma separated (e.g. warp,bg3-dx11): {', '.join(PROFILES)}")
+    i.add_argument("--exe", help="the game exe to install beside (default: the DX12 or largest 64-bit exe)")
+    i.add_argument("--prefix", help="Wine prefix, for games that are not Steam library entries")
     i.add_argument("--fg", default="auto", choices=["auto", "separate", "off"])
     i.add_argument("--set", action="append", metavar="Section.Key=Value")
     i.add_argument("--edit-registry", action="store_true")

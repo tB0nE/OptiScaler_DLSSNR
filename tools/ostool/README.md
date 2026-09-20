@@ -24,8 +24,13 @@ Default location: `~/.local/share/ostool/kit` (override with `OSTOOL_KIT`).
 
 `GAME` is an appid, part of the name, or a folder path.
 
-* **Profiles** (`--profile`): `default` (warp off), `warp` (59/80), `warp-rt` (28/64). Anything else:
-  `--set Section.Key=Value` (repeatable).
+* **Profiles** (`--profile`, comma separated to combine): `default` (warp off), `warp` (59/80),
+  `warp-rt` (28/64), `bg3-dx11` (`Dx11Upscaler=dlss_12`, for Baldur's Gate 3's `bg3_dx11.exe`).
+  Anything else: `--set Section.Key=Value` (repeatable). The ini's `TargetProcessName` is always forced
+  to `auto`: an ini naming another game's exe puts OptiScaler into pass-through mode.
+* **Which exe**: the DX12 exe if there is one (e.g. `x64_DX12`), else the largest 64-bit exe. Override
+  with `--exe bin/x64/game.exe`. For a game that is not a Steam library entry pass its folder as GAME
+  and `--prefix /path/to/wineprefix` (needed for `--edit-registry`).
 * **Frame generation** (`--fg auto|separate|off`): `auto` installs the mod (as `version.dll`) only if the
   game already has native DLSS-G (Streamline `sl.dlss_g.dll` or `nvngx_dlssg.dll`). OptiScaler and the mod
   stay two separate proxies (`dxgi.dll` and `version.dll`); chaining one under the other did not work under Proton.
